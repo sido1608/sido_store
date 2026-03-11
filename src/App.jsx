@@ -103,6 +103,7 @@ const STORAGE_KEYS = {
   products: 'my_store_products_v2',
   orders: 'my_store_orders_v2',
   customerOrders: 'my_store_customer_orders_v1',
+  cart: 'my_store_cart_v1',
   siteConfig: 'my_store_site_config_v2',
   favorites: 'my_store_favorites_v1',
   adminTheme: 'my_store_admin_theme_v1',
@@ -479,6 +480,76 @@ const normalizeOrders = (items) => {
   }));
 };
 
+const normalizeCartItems = (items) => {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map((item, index) => {
+      const rawImages = Array.isArray(item?.images) ? item.images : [];
+      const normalizedImages = Array.from(
+        new Set(
+          [
+            ...rawImages.map((entry) => String(entry || '').trim()),
+            String(item?.image || '').trim(),
+          ].filter(Boolean),
+        ),
+      );
+      const coverImage = normalizedImages[0] || String(item?.image || '').trim();
+      const stock = item?.stock === undefined || item?.stock === null || item?.stock === ''
+        ? Number.POSITIVE_INFINITY
+        : clampStock(item.stock);
+
+      return {
+        ...item,
+        id: item?.id ?? ('cart-item-' + index),
+        name: String(item?.name || '').trim(),
+        image: coverImage,
+        images: normalizedImages,
+        price: Math.max(0, Number(item?.price) || 0),
+        oldPrice: Number(item?.oldPrice) > 0 ? Number(item.oldPrice) : 0,
+        stock,
+        qty: Math.max(1, Number(item?.qty) || 1),
+        selectedSize: String(item?.selectedSize || '').trim(),
+        selectedColor: String(item?.selectedColor || '').trim(),
+        cartKey: item?.cartKey || buildCartItemKey(item || {}),
+        variants: normalizeProductVariants(item?.variants),
+      };
+    })
+    .filter((item) => item.name || item.id);
+};
+
+const mergeCustomerOrdersWithOrders = (currentCustomerOrders, allOrders) => {
+  const customerList = Array.isArray(currentCustomerOrders) ? currentCustomerOrders : [];
+  const liveOrders = Array.isArray(allOrders) ? allOrders : [];
+  if (customerList.length === 0 || liveOrders.length === 0) return customerList;
+
+  const ordersMap = new Map(liveOrders.map((entry) => [String(entry.id), entry]));
+  let changed = false;
+
+  const nextOrders = customerList.map((entry) => {
+    const liveOrder = ordersMap.get(String(entry.id));
+    if (!liveOrder) return entry;
+
+    const mergedOrder = {
+      ...entry,
+      ...liveOrder,
+      customer: {
+        ...(entry.customer || {}),
+        ...(liveOrder.customer || {}),
+      },
+      items: Array.isArray(liveOrder.items) && liveOrder.items.length > 0 ? liveOrder.items : entry.items,
+    };
+
+    if (JSON.stringify(mergedOrder) !== JSON.stringify(entry)) {
+      changed = true;
+    }
+
+    return mergedOrder;
+  });
+
+  return changed ? normalizeOrders(nextOrders) : customerList;
+};
+
 const getOrderStatusMeta = (status) => {
   const found = ORDER_STATUSES.find((entry) => entry.key === status);
   return found || ORDER_STATUSES[0];
@@ -577,6 +648,50 @@ const MaintenanceView = ({ siteName, onOpenAdmin }) => (
   </div>
 );
 
+const BlockedAccessView = ({ siteName, blockedUntil, blockedReason, onRefresh }) => {
+  const blockedUntilLabel = blockedUntil
+    ? new Date(blockedUntil).toLocaleString('ar-DZ')
+    : '';
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-rose-950/80 flex flex-col items-center justify-center p-4 text-center text-white">
+      <Motion.div
+        initial={{ scale: 0.96, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={PAGE_TRANSITION}
+        className="relative overflow-hidden bg-white/10 backdrop-blur-2xl p-8 md:p-10 rounded-[2.5rem] shadow-2xl border border-white/20 max-w-xl w-full"
+      >
+        <div className="absolute -top-16 -left-8 h-40 w-40 rounded-full bg-rose-400/20 blur-3xl" />
+        <div className="absolute -bottom-16 -right-8 h-40 w-40 rounded-full bg-amber-300/20 blur-3xl" />
+
+        <div className="relative z-10">
+          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-rose-200/30 bg-rose-400/15 text-rose-200">
+            <ShieldCheck size={42} />
+          </div>
+          <h2 className="text-3xl md:text-4xl font-black mb-3">تم تقييد الوصول مؤقتًا</h2>
+          <p className="text-base md:text-lg font-bold text-slate-200 mb-3">رصد نظام الحماية نشاطًا غير طبيعي من هذا الجهاز، لذلك تم إيقاف الوصول مؤقتًا إلى {siteName || 'المتجر'}.</p>
+          <div className="space-y-2 rounded-3xl border border-white/15 bg-white/10 px-5 py-4 text-sm font-bold text-slate-100">
+            <p>{blockedUntilLabel ? 'يمكنك المحاولة مجددًا بعد ' + blockedUntilLabel : 'يمكنك المحاولة لاحقًا أو انتظار مراجعة المسؤول.'}</p>
+            {blockedReason ? <p className="text-rose-100/90">السبب: {blockedReason}</p> : null}
+          </div>
+
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 font-black text-slate-900 transition hover:bg-slate-100"
+            >
+              <RefreshCw size={18} /> تحديث الحالة
+            </button>
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold text-slate-100">
+              <AlertTriangle size={16} /> إذا كنت المالك، افتح لوحة الإدارة من جهاز أو عنوان IP غير محظور لفك الحظر.
+            </span>
+          </div>
+        </div>
+      </Motion.div>
+    </div>
+  );
+};
 const OrderStatusPill = ({ status }) => {
   const meta = getOrderStatusMeta(status);
   return <span className={`text-xs font-black px-3 py-1 rounded-full border ${meta.className}`}>{meta.label}</span>;
@@ -1610,6 +1725,10 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [cooldownUntil, setCooldownUntil] = useState(0);
 
+  const blockedUntilLabel = securityStatus?.blockedUntil
+    ? new Date(securityStatus.blockedUntil).toLocaleString('ar-DZ')
+    : '';
+
   const requestMeta = {
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
     page: '/admin/login',
@@ -1620,6 +1739,11 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
 
     if (!auth) {
       showToast('Cannot log in because authentication service is unavailable.', 'error');
+      return;
+    }
+
+    if (securityStatus?.blocked) {
+      showToast(blockedUntilLabel ? '\u062a\u0645 \u062d\u0638\u0631 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0624\u0642\u062a\u064b\u0627 \u062d\u062a\u0649 ' + blockedUntilLabel : '\u062a\u0645 \u062d\u0638\u0631 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0624\u0642\u062a\u064b\u0627 \u0628\u0648\u0627\u0633\u0637\u0629 \u0646\u0638\u0627\u0645 \u0627\u0644\u062d\u0645\u0627\u064a\u0629.', 'error');
       return;
     }
 
@@ -1691,6 +1815,11 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
   const handleForgotPassword = async () => {
     if (!auth) {
       showToast('Unable to send reset link because service is unavailable.', 'error');
+      return;
+    }
+
+    if (securityStatus?.blocked) {
+      showToast(blockedUntilLabel ? '\u062a\u0645 \u062d\u0638\u0631 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0624\u0642\u062a\u064b\u0627 \u062d\u062a\u0649 ' + blockedUntilLabel : '\u062a\u0645 \u062d\u0638\u0631 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0624\u0642\u062a\u064b\u0627 \u0628\u0648\u0627\u0633\u0637\u0629 \u0646\u0638\u0627\u0645 \u0627\u0644\u062d\u0645\u0627\u064a\u0629.', 'error');
       return;
     }
 
@@ -1788,7 +1917,7 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
 
           <button
             type="submit"
-            disabled={isSubmitting || !auth || !securityStatus?.loginEnabled}
+            disabled={isSubmitting || !auth || !securityStatus?.loginEnabled || securityStatus?.blocked}
             className="w-full mt-2 bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl shadow-lg shadow-slate-900/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? 'Signing in...' : 'Sign In'}
@@ -1797,7 +1926,7 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
           <button
             type="button"
             onClick={handleForgotPassword}
-            disabled={isSendingReset || !auth || !securityStatus?.resetPasswordEnabled}
+            disabled={isSendingReset || !auth || !securityStatus?.resetPasswordEnabled || securityStatus?.blocked}
             className="w-full text-sm font-bold text-emerald-700 hover:text-emerald-600 py-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSendingReset ? 'Sending...' : 'Forgot Password'}
@@ -1810,6 +1939,11 @@ const AdminLogin = ({ showToast, onBackToStore, securityStatus }) => {
         >
           Back to Store
         </button>
+        {securityStatus?.blocked && (
+          <div className="mt-4 rounded-2xl bg-rose-50 border border-rose-200 p-3 text-xs font-bold text-rose-700 text-center">
+            {blockedUntilLabel ? '\u062a\u0645 \u062a\u0639\u0644\u064a\u0642 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0646 \u0647\u0630\u0627 \u0627\u0644\u062c\u0647\u0627\u0632 \u062d\u062a\u0649 ' + blockedUntilLabel : '\u062a\u0645 \u062a\u0639\u0644\u064a\u0642 \u0627\u0644\u0648\u0635\u0648\u0644 \u0645\u0646 \u0647\u0630\u0627 \u0627\u0644\u062c\u0647\u0627\u0632 \u0645\u0624\u0642\u062a\u064b\u0627.'}
+          </div>
+        )}
         {!auth && (
           <div className="mt-4 rounded-2xl bg-orange-50 border border-orange-200 p-3 text-xs font-bold text-orange-700 text-center">
             Authentication service is not configured correctly.
@@ -1942,7 +2076,7 @@ const LazyAdminCMS = lazy(() => import('./pages/AdminCMS'));
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(ROUTES.home);
-  const [cart, dispatchCart] = useReducer(cartReducer, []);
+  const [cart, dispatchCart] = useReducer(cartReducer, readStorage(STORAGE_KEYS.cart, []), normalizeCartItems);
   const [orders, setOrders] = useState(() => normalizeOrders(readStorage(STORAGE_KEYS.orders, [])));
   const [customerOrders, setCustomerOrders] = useState(() => normalizeOrders(readStorage(STORAGE_KEYS.customerOrders, [])));
   const [adminUser, setAdminUser] = useState(null);
@@ -1968,7 +2102,14 @@ export default function App() {
   const [isCartAnimating, setIsCartAnimating] = useState(false);
   const [isCouponCelebrating, setIsCouponCelebrating] = useState(false);
   const [isOrderCelebrating, setIsOrderCelebrating] = useState(false);
-  const [securityStatus, setSecurityStatus] = useState({ loginEnabled: true, resetPasswordEnabled: true, heightenedProtection: false });
+  const [securityStatus, setSecurityStatus] = useState({
+    loginEnabled: true,
+    resetPasswordEnabled: true,
+    heightenedProtection: false,
+    blocked: false,
+    blockedUntil: '',
+    blockedReason: '',
+  });
   const cartAnimationTimeoutRef = useRef(null);
   const audioContextRef = useRef(null);
   const isAdminAuth = Boolean(adminUser);
@@ -2004,8 +2145,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (currentRoute !== ROUTES.admin) return undefined;
-
     let active = true;
     const loadStatus = async () => {
       try {
@@ -2015,6 +2154,9 @@ export default function App() {
             loginEnabled: Boolean(status.loginEnabled ?? true),
             resetPasswordEnabled: Boolean(status.resetPasswordEnabled ?? true),
             heightenedProtection: Boolean(status.heightenedProtection ?? false),
+            blocked: Boolean(status.blocked ?? false),
+            blockedUntil: String(status.blockedUntil || ''),
+            blockedReason: String(status.blockedReason || ''),
           });
         }
       } catch {
@@ -2031,7 +2173,7 @@ export default function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [currentRoute]);
+  }, [isAdminAuth]);
 
   useEffect(() => {
     let active = true;
@@ -2074,6 +2216,14 @@ export default function App() {
 
   useEffect(() => {
     writeStorage(STORAGE_KEYS.orders, orders);
+  }, [orders]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.cart, cart);
+  }, [cart]);
+
+  useEffect(() => {
+    setCustomerOrders((previous) => mergeCustomerOrdersWithOrders(previous, orders));
   }, [orders]);
 
   useEffect(() => {
@@ -2413,6 +2563,19 @@ export default function App() {
     );
   }
 
+  if (securityStatus.blocked && !isAdminAuth) {
+    return (
+      <div dir="rtl" style={{ fontFamily: "'Alexandria', sans-serif" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Alexandria:wght@400;500;600;700;800;900&display=swap');`}</style>
+        <BlockedAccessView
+          siteName={siteConfig.name}
+          blockedUntil={securityStatus.blockedUntil}
+          blockedReason={securityStatus.blockedReason}
+          onRefresh={() => window.location.reload()}
+        />
+      </div>
+    );
+  }
   const isCheckoutOrAdmin = currentRoute === ROUTES.checkout || currentRoute === ROUTES.admin;
 
   return (

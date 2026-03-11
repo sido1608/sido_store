@@ -33,6 +33,7 @@ import { getOrderDateRange, isWithinDateRange, toDateInputValue } from '../utils
 import AdminSecurityCenter from '../components/AdminSecurityCenter';
 import { logAdminSecurityAction } from '../services/securityApi';
 import {
+  disconnectTelegramIntegration,
   fetchTelegramIntegration,
   saveTelegramIntegration,
   sendAdminTelegramNotification,
@@ -45,12 +46,12 @@ const OrderStatusPill = ({ status, getOrderStatusMeta }) => {
   return <span className={`text-xs font-black px-3 py-1 rounded-full border ${meta.className}`}>{meta.label}</span>;
 };
 const ORDER_PERIOD_OPTIONS = [
-  { key: 'today', label: 'طلبيات اليوم' },
-  { key: 'yesterday', label: 'طلبيات البارحة' },
-  { key: 'week', label: 'طلبيات هذا الأسبوع' },
-  { key: 'month', label: 'طلبيات هذا الشهر' },
-  { key: 'all', label: 'كل الطلبيات' },
-  { key: 'custom', label: 'فترة مخصصة' },
+  { key: 'today', label: '\u0637\u0644\u0628\u064a\u0627\u062a \u0627\u0644\u064a\u0648\u0645' },
+  { key: 'yesterday', label: '\u0637\u0644\u0628\u064a\u0627\u062a \u0627\u0644\u0628\u0627\u0631\u062d\u0629' },
+  { key: 'week', label: '\u0637\u0644\u0628\u064a\u0627\u062a \u0647\u0630\u0627 \u0627\u0644\u0623\u0633\u0628\u0648\u0639' },
+  { key: 'month', label: '\u0637\u0644\u0628\u064a\u0627\u062a \u0647\u0630\u0627 \u0627\u0644\u0634\u0647\u0631' },
+  { key: 'all', label: '\u0643\u0644 \u0627\u0644\u0637\u0644\u0628\u064a\u0627\u062a' },
+  { key: 'custom', label: '\u0641\u062a\u0631\u0629 \u0645\u062e\u0635\u0635\u0629' },
 ];
 const TELEGRAM_NOTIFICATION_DEFAULTS = {
   newOrder: true,
@@ -59,12 +60,12 @@ const TELEGRAM_NOTIFICATION_DEFAULTS = {
   adminActions: true,
 };
 
-const ALL_CATEGORY_LABEL = 'الكل';
-const DEFAULT_CATEGORY_NAME = 'أخرى';
+const ALL_CATEGORY_LABEL = '\u0627\u0644\u0643\u0644';
+const DEFAULT_CATEGORY_NAME = '\u0623\u062e\u0631\u0649';
 const NOTICE_LEVEL_OPTIONS = [
-  { value: 'normal', label: 'عادي' },
-  { value: 'important', label: 'مهم' },
-  { value: 'critical', label: 'مهم جدًا' },
+  { value: 'normal', label: '\u0639\u0627\u062f\u064a' },
+  { value: 'important', label: '\u0645\u0647\u0645' },
+  { value: 'critical', label: '\u0645\u0647\u0645 \u062c\u062f\u064b\u0627' },
 ];
 
 const AdminCMS = ({
@@ -167,12 +168,15 @@ const AdminCMS = ({
     hasToken: false,
     notifications: { ...TELEGRAM_NOTIFICATION_DEFAULTS },
     connectionStatus: 'disconnected',
+    requiresReconnect: false,
+    requiresServerConfig: false,
     lastTestAt: '',
     lastError: '',
   });
   const [isTelegramLoading, setIsTelegramLoading] = useState(false);
   const [isTelegramSaving, setIsTelegramSaving] = useState(false);
   const [isTelegramTesting, setIsTelegramTesting] = useState(false);
+  const [isTelegramDisconnecting, setIsTelegramDisconnecting] = useState(false);
   const [isTelegramLoaded, setIsTelegramLoaded] = useState(false);
   const [wilayaShippingOptions, setWilayaShippingOptions] = useState([]);
   const [shippingWilayaSearch, setShippingWilayaSearch] = useState('');
@@ -180,10 +184,10 @@ const AdminCMS = ({
   const [wilayaShippingError, setWilayaShippingError] = useState('');
   const isDarkMode = adminTheme === 'dark';
 
-  const formatMoney = (value) => new Intl.NumberFormat('fr-DZ').format(Number(value) || 0) + ' د.ج';
+  const formatMoney = (value) => new Intl.NumberFormat('fr-DZ').format(Number(value) || 0) + ' \u062f.\u062c';
   const formatOrderDate = (value) => {
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return 'تاريخ غير صالح';
+    if (Number.isNaN(date.getTime())) return '\u062a\u0627\u0631\u064a\u062e \u063a\u064a\u0631 \u0635\u0627\u0644\u062d';
     return date.toLocaleString('ar-DZ');
   };
 
@@ -411,7 +415,7 @@ const AdminCMS = ({
       enabled: Boolean(source.enabled),
       botToken: '',
       botTokenMasked: String(source.botTokenMasked || ''),
-      chatId: String(source.chatId || previous.chatId || ''),
+      chatId: String(source.chatId || ''),
       chatIdMasked: String(source.chatIdMasked || ''),
       hasToken: Boolean(source.hasToken),
       notifications: {
@@ -419,6 +423,8 @@ const AdminCMS = ({
         ...(source.notifications || {}),
       },
       connectionStatus: String(source.connectionStatus || 'disconnected'),
+      requiresReconnect: Boolean(source.requiresReconnect),
+      requiresServerConfig: Boolean(source.requiresServerConfig),
       lastTestAt: String(source.lastTestAt || ''),
       lastError: String(source.lastError || ''),
     }));
@@ -432,7 +438,7 @@ const AdminCMS = ({
       setIsTelegramLoaded(true);
     } catch (error) {
       if (!silent) {
-        showToast(String(error?.message || 'تعذر تحميل إعدادات تيليجرام'), 'error');
+        showToast(String(error?.message || '\u062a\u0639\u0630\u0631 \u062a\u062d\u0645\u064a\u0644 \u0625\u0639\u062f\u0627\u062f\u0627\u062a \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645'), 'error');
       }
     } finally {
       setIsTelegramLoading(false);
@@ -449,12 +455,12 @@ const AdminCMS = ({
     const token = String(telegramSettings.botToken || '').trim();
 
     if (!chatId) {
-      showToast('أدخل Chat ID أولاً', 'error');
+      showToast(telegramUiCopy.enterChatId, 'error');
       return;
     }
 
     if (!token && !telegramSettings.hasToken) {
-      showToast('أدخل Bot Token أولاً', 'error');
+      showToast(telegramUiCopy.enterBotToken, 'error');
       return;
     }
 
@@ -467,9 +473,9 @@ const AdminCMS = ({
         notifications: telegramSettings.notifications,
       });
       applyTelegramSettings(settings || {});
-      showToast('تم حفظ إعدادات تيليجرام بنجاح', 'success');
+      showToast(telegramUiCopy.saveSuccess, 'success');
     } catch (error) {
-      showToast(String(error?.message || 'تعذر حفظ إعدادات تيليجرام'), 'error');
+      showToast(String(error?.message || telegramUiCopy.saveError), 'error');
     } finally {
       setIsTelegramSaving(false);
     }
@@ -485,11 +491,24 @@ const AdminCMS = ({
         notifications: telegramSettings.notifications,
       });
       applyTelegramSettings(settings || {});
-      showToast('تم إرسال رسالة اختبار تيليجرام بنجاح', 'success');
+      showToast(telegramUiCopy.testSuccess, 'success');
     } catch (error) {
-      showToast(String(error?.message || 'فشل اختبار الربط مع تيليجرام'), 'error');
+      showToast(String(error?.message || telegramUiCopy.testError), 'error');
     } finally {
       setIsTelegramTesting(false);
+    }
+  };
+
+  const handleDisconnectTelegramSettings = async () => {
+    try {
+      setIsTelegramDisconnecting(true);
+      const settings = await disconnectTelegramIntegration();
+      applyTelegramSettings(settings || {});
+      showToast(telegramUiCopy.disconnectSuccess, 'success');
+    } catch (error) {
+      showToast(String(error?.message || telegramUiCopy.disconnectError), 'error');
+    } finally {
+      setIsTelegramDisconnecting(false);
     }
   };
 
@@ -540,12 +559,12 @@ const AdminCMS = ({
     };
 
     if (!normalizedProduct.name || !normalizedProduct.image || normalizedProduct.price <= 0) {
-      showToast('أدخل بيانات منتج صحيحة', 'error');
+      showToast('\u0623\u062f\u062e\u0644 \u0628\u064a\u0627\u0646\u0627\u062a \u0645\u0646\u062a\u062c \u0635\u062d\u064a\u062d\u0629', 'error');
       return;
     }
 
     if (normalizedProduct.oldPrice > 0 && normalizedProduct.oldPrice <= normalizedProduct.price) {
-      showToast('السعر قبل الخصم يجب أن يكون أكبر من السعر الحالي', 'error');
+      showToast('\u0627\u0644\u0633\u0639\u0631 \u0642\u0628\u0644 \u0627\u0644\u062e\u0635\u0645 \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0623\u0643\u0628\u0631 \u0645\u0646 \u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u062d\u0627\u0644\u064a', 'error');
       return;
     }
 
@@ -556,7 +575,7 @@ const AdminCMS = ({
           product.id === productId ? { ...normalizedProduct, id: productId } : product,
         ),
       );
-      showToast('تم تعديل المنتج بنجاح');
+      showToast('\u062a\u0645 \u062a\u0639\u062f\u064a\u0644 \u0627\u0644\u0645\u0646\u062a\u062c \u0628\u0646\u062c\u0627\u062d');
       void notifyAdminAction('admin_action', {
         action: 'update_product',
         entity: 'product',
@@ -566,7 +585,7 @@ const AdminCMS = ({
     } else {
       const productId = Date.now();
       setProducts([{ ...normalizedProduct, id: productId }, ...products]);
-      showToast('تم نشر المنتج الجديد في المتجر');
+      showToast('\u062a\u0645 \u0646\u0634\u0631 \u0627\u0644\u0645\u0646\u062a\u062c \u0627\u0644\u062c\u062f\u064a\u062f \u0641\u064a \u0627\u0644\u0645\u062a\u062c\u0631');
       void notifyAdminAction('admin_action', {
         action: 'create_product',
         entity: 'product',
@@ -585,7 +604,7 @@ const AdminCMS = ({
     if (!url) return;
 
     if (!/^https?:\/\//i.test(url)) {
-      showToast('أدخل رابط صورة صحيح', 'error');
+      showToast('\u0623\u062f\u062e\u0644 \u0631\u0627\u0628\u0637 \u0635\u0648\u0631\u0629 \u0635\u062d\u064a\u062d', 'error');
       return;
     }
 
@@ -647,12 +666,12 @@ const AdminCMS = ({
     if (!value) return;
 
     if (value === ALL_CATEGORY_LABEL) {
-      showToast('لا يمكن استخدام تصنيف الكل', 'error');
+      showToast('\u0644\u0627 \u064a\u0645\u0643\u0646 \u0625\u0636\u0627\u0641\u0629 \u0647\u0630\u0627 \u0627\u0644\u062a\u0635\u0646\u064a\u0641', 'error');
       return;
     }
 
     if (categoryOptions.includes(value)) {
-      showToast('التصنيف موجود مسبقًا', 'error');
+      showToast('\u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0645\u0648\u062c\u0648\u062f \u0628\u0627\u0644\u0641\u0639\u0644', 'error');
       return;
     }
 
@@ -661,21 +680,21 @@ const AdminCMS = ({
       productCategories: [...categoryOptions, value],
     });
     setCategoryDraft('');
-    showToast('تم إضافة التصنيف', 'success');
+    showToast('\u062a\u0645 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062a\u0635\u0646\u064a\u0641', 'success');
   };
 
   const handleRenameCategory = (oldName) => {
     if (!oldName || oldName === DEFAULT_CATEGORY_NAME) {
-      showToast('هذا التصنيف محمي', 'error');
+      showToast('\u0644\u0627 \u064a\u0645\u0643\u0646 \u062a\u0639\u062f\u064a\u0644 \u0647\u0630\u0627 \u0627\u0644\u062a\u0635\u0646\u064a\u0641', 'error');
       return;
     }
 
-    const proposed = window.prompt('اسم التصنيف الجديد', oldName);
+    const proposed = window.prompt('\u0627\u0633\u0645 \u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0627\u0644\u062c\u062f\u064a\u062f\u061f', oldName);
     const nextName = String(proposed || '').trim();
     if (!nextName || nextName === oldName) return;
 
     if (nextName === ALL_CATEGORY_LABEL || categoryOptions.includes(nextName)) {
-      showToast('الاسم غير متاح', 'error');
+      showToast('\u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u062c\u062f\u064a\u062f \u063a\u064a\u0631 \u0635\u0627\u0644\u062d', 'error');
       return;
     }
 
@@ -691,16 +710,16 @@ const AdminCMS = ({
       ),
     );
 
-    showToast('تم تعديل اسم التصنيف', 'success');
+    showToast('\u062a\u0645 \u062a\u0639\u062f\u064a\u0644 \u0627\u0644\u062a\u0635\u0646\u064a\u0641', 'success');
   };
 
   const handleDeleteCategory = (categoryName) => {
     if (!categoryName || categoryName === DEFAULT_CATEGORY_NAME) {
-      showToast('التصنيف أخرى محمي ولا يمكن حذفه', 'error');
+      showToast('\u0644\u0627 \u064a\u0645\u0643\u0646 \u062d\u0630\u0641 \u0647\u0630\u0627 \u0627\u0644\u062a\u0635\u0646\u064a\u0641', 'error');
       return;
     }
 
-    if (!window.confirm('سيتم نقل منتجات هذا التصنيف إلى أخرى. متابعة؟')) return;
+    if (!window.confirm('\u0633\u064a\u062a\u0645 \u0646\u0642\u0644 \u0645\u0646\u062a\u062c\u0627\u062a \u0647\u0630\u0627 \u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0625\u0644\u0649 "\u0623\u062e\u0631\u0649". \u0645\u062a\u0627\u0628\u0639\u0629\u061f')) return;
 
     const nextCategories = categoryOptions.filter((entry) => entry !== categoryName);
     if (!nextCategories.includes(DEFAULT_CATEGORY_NAME)) nextCategories.push(DEFAULT_CATEGORY_NAME);
@@ -716,7 +735,7 @@ const AdminCMS = ({
       ),
     );
 
-    showToast('تم حذف التصنيف ونقل المنتجات إلى أخرى', 'success');
+    showToast('\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0648\u0646\u0642\u0644 \u0627\u0644\u0645\u0646\u062a\u062c\u0627\u062a \u0625\u0644\u0649 \u0623\u062e\u0631\u0649', 'success');
   };
 
   const handleSaveNotice = (event) => {
@@ -725,7 +744,7 @@ const AdminCMS = ({
     const title = String(noticeForm.title || '').trim();
     const message = String(noticeForm.message || '').trim();
     if (!title && !message) {
-      showToast('أدخل عنوان أو نص الإشعار', 'error');
+      showToast('\u064a\u062c\u0628 \u0643\u062a\u0627\u0628\u0629 \u0639\u0646\u0648\u0627\u0646 \u0623\u0648 \u0646\u0635 \u0627\u0644\u0625\u0634\u0639\u0627\u0631', 'error');
       return;
     }
 
@@ -756,7 +775,7 @@ const AdminCMS = ({
       customerNotices: nextNotices,
     });
 
-    showToast(editingNoticeId ? 'تم تحديث إشعار الزبائن' : 'تم إنشاء إشعار جديد', 'success');
+    showToast(editingNoticeId ? '\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0625\u0634\u0639\u0627\u0631' : '\u062a\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0625\u0634\u0639\u0627\u0631', 'success');
     resetNoticeForm();
   };
 
@@ -782,13 +801,13 @@ const AdminCMS = ({
   };
 
   const handleDeleteNotice = (noticeId) => {
-    if (!window.confirm('حذف هذا الإشعار؟')) return;
+    if (!window.confirm('\u062d\u0630\u0641 \u0647\u0630\u0627 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u061f')) return;
     setSiteConfig({
       ...siteConfig,
       customerNotices: customerNotices.filter((entry) => entry.id !== noticeId),
     });
     if (editingNoticeId === noticeId) resetNoticeForm();
-    showToast('تم حذف الإشعار', 'success');
+    showToast('\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0625\u0634\u0639\u0627\u0631', 'success');
   };
 
   const handleToggleNoticeEnabled = (noticeId) => {
@@ -828,10 +847,10 @@ const AdminCMS = ({
       });
 
       setNoticeForm((previous) => ({ ...previous, image: imageUrl }));
-      setNoticeImageUploadState({ isUploading: false, progress: 100, error: '', success: 'تم رفع صورة الإشعار بنجاح.' });
-      showToast('تم رفع صورة الإشعار', 'success');
+      setNoticeImageUploadState({ isUploading: false, progress: 100, error: '', success: '\u062a\u0645 \u0631\u0641\u0639 \u0635\u0648\u0631\u0629 \u0627\u0644\u0625\u0634\u0639\u0627\u0631 \u0628\u0646\u062c\u0627\u062d.' });
+      showToast('\u062a\u0645 \u0631\u0641\u0639 \u0635\u0648\u0631\u0629 \u0627\u0644\u0625\u0634\u0639\u0627\u0631', 'success');
     } catch (error) {
-      const message = String(error?.message || 'فشل رفع صورة الإشعار');
+      const message = String(error?.message || '\u062a\u0639\u0630\u0631 \u0631\u0641\u0639 \u0635\u0648\u0631\u0629 \u0627\u0644\u0625\u0634\u0639\u0627\u0631');
       setNoticeImageUploadState({ isUploading: false, progress: 0, error: message, success: '' });
       showToast(message, 'error');
     } finally {
@@ -870,11 +889,11 @@ const AdminCMS = ({
         isUploading: false,
         progress: 100,
         error: '',
-        success: 'تم رفع شعار المتجر بنجاح.',
+        success: '\u062a\u0645 \u0631\u0641\u0639 \u0635\u0648\u0631\u0629 \u0627\u0644\u0634\u0639\u0627\u0631 \u0628\u0646\u062c\u0627\u062d.',
       });
-      showToast('تم تحديث شعار المتجر', 'success');
+      showToast('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0634\u0639\u0627\u0631 \u0627\u0644\u0645\u062a\u062c\u0631', 'success');
     } catch (error) {
-      const message = String(error?.message || 'فشل رفع شعار المتجر');
+      const message = String(error?.message || '\u062a\u0639\u0630\u0631 \u0631\u0641\u0639 \u0635\u0648\u0631\u0629 \u0627\u0644\u0634\u0639\u0627\u0631');
       setLogoUploadState({ isUploading: false, progress: 0, error: message, success: '' });
       showToast(message, 'error');
     } finally {
@@ -921,10 +940,10 @@ const AdminCMS = ({
   };
 
   const handleDeleteProduct = (id) => {
-    if (window.confirm('هل تريد حذف هذا المنتج من المتجر؟')) {
+    if (window.confirm('\u0647\u0644 \u062a\u0631\u064a\u062f \u0645\u0633\u062d \u0643\u0644 \u0623\u0633\u0639\u0627\u0631 \u0627\u0644\u062a\u0648\u0635\u064a\u0644 \u0627\u0644\u0645\u0636\u0628\u0648\u0637\u0629\u061f')) {
       const product = products.find((entry) => entry.id === id);
       setProducts(products.filter((entry) => entry.id !== id));
-      showToast('تم حذف المنتج', 'error');
+      showToast('\u062a\u0645 \u0645\u0633\u062d \u0627\u0644\u0623\u0633\u0639\u0627\u0631', 'error');
       void notifyAdminAction('admin_action', {
         action: 'delete_product',
         entity: 'product',
@@ -981,11 +1000,11 @@ const AdminCMS = ({
         isUploading: false,
         progress: 100,
         error: '',
-        success: 'تم رفع الصورة بنجاح عبر ImgBB.',
+        success: '\u062a\u0645 \u0631\u0641\u0639 \u0627\u0644\u0635\u0648\u0631\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629 \u0639\u0628\u0631 ImgBB.',
       });
-      showToast('تم رفع الصورة عبر ImgBB بنجاح', 'success');
+      showToast('\u062a\u0645 \u0631\u0641\u0639 \u0627\u0644\u0635\u0648\u0631\u0629 \u0639\u0628\u0631 ImgBB \u0628\u0646\u062c\u0627\u062d', 'success');
     } catch (error) {
-      const message = String(error?.message || 'فشل رفع الصورة. حاول مرة أخرى.');
+      const message = String(error?.message || '\u062a\u0639\u0630\u0631 \u0631\u0641\u0639 \u0627\u0644\u0635\u0648\u0631\u0629. \u062a\u062d\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0644\u0641.');
       setImageUploadState({
         isUploading: false,
         progress: 0,
@@ -1007,12 +1026,12 @@ const AdminCMS = ({
     const expiresAt = couponForm.expiresAt ? new Date(couponForm.expiresAt).toISOString() : '';
 
     if (!code || discount <= 0) {
-      showToast('أدخل كود كوبون ونسبة خصم صحيحة', 'error');
+      showToast('\u0623\u062f\u062e\u0644 \u0628\u064a\u0627\u0646\u0627\u062a \u0643\u0648\u0628\u0648\u0646 \u0635\u062d\u064a\u062d\u0629', 'error');
       return;
     }
 
     if (adminCoupons.some((coupon) => normalizeCouponCode(coupon.code) === code)) {
-      showToast('هذا الكود موجود مسبقاً', 'error');
+      showToast('\u0631\u0645\u0632 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0645\u0633\u062a\u062e\u062f\u0645 \u0628\u0627\u0644\u0641\u0639\u0644', 'error');
       return;
     }
 
@@ -1032,7 +1051,7 @@ const AdminCMS = ({
     });
 
     setCouponForm({ code: '', discount: 10, maxUses: 100, expiresAt: '' });
-    showToast('تم إنشاء الكوبون بنجاح', 'success');
+    showToast('\u062a\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0628\u0646\u062c\u0627\u062d', 'success');
   };
 
   const handleDeleteCoupon = (couponId) => {
@@ -1040,7 +1059,7 @@ const AdminCMS = ({
       ...siteConfig,
       coupons: adminCoupons.filter((coupon) => coupon.id !== couponId),
     });
-    showToast('تم حذف الكوبون', 'error');
+    showToast('\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0643\u0648\u0628\u0648\u0646', 'error');
   };
 
   const handleOrderStatusChange = (orderId, nextStatus) => {
@@ -1048,7 +1067,7 @@ const AdminCMS = ({
     setOrders(
       orders.map((order) => (order.id === orderId ? { ...order, status: nextStatus } : order)),
     );
-    showToast('تم تحديث حالة الطلب');
+    showToast('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u062d\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628');
 
     void notifyAdminAction('order_status_changed', {
       orderId: String(orderId),
@@ -1058,6 +1077,86 @@ const AdminCMS = ({
     });
   };
 
+  const telegramUiCopy = {
+    title: '\u0631\u0628\u0637 \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645',
+    refresh: '\u062a\u062d\u062f\u064a\u062b',
+    refreshing: '\u062c\u0627\u0631\u064d \u0627\u0644\u062a\u062d\u062f\u064a\u062b...',
+    currentStatusTitle: '\u062d\u0627\u0644\u0629 \u0627\u0644\u0631\u0628\u0637 \u0627\u0644\u062d\u0627\u0644\u064a\u0629',
+    lastTest: '\u0622\u062e\u0631 \u0627\u062e\u062a\u0628\u0627\u0631',
+    tokenLabel: 'Bot Token',
+    tokenPlaceholderNew: '\u0623\u062f\u062e\u0644 Bot Token',
+    tokenPlaceholderUpdate: '\u0623\u062f\u062e\u0644 Bot Token \u062c\u062f\u064a\u062f\u064b\u0627 \u0644\u0644\u062a\u062d\u062f\u064a\u062b',
+    storedLabel: '\u0627\u0644\u0645\u062d\u0641\u0648\u0638',
+    chatLabel: 'Chat ID',
+    chatPlaceholder: '\u0645\u062b\u0627\u0644: -1001234567890',
+    enabled: '\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a \u0645\u0641\u0639\u0651\u0644\u0629',
+    disabled: '\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a \u0645\u0639\u0637\u0644\u0629',
+    typesTitle: '\u0623\u0646\u0648\u0627\u0639 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a',
+    newOrder: '\u0637\u0644\u0628 \u062c\u062f\u064a\u062f',
+    orderStatus: '\u062a\u063a\u064a\u064a\u0631 \u062d\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628',
+    adminActions: '\u0639\u0645\u0644\u064a\u0627\u062a \u0625\u062f\u0627\u0631\u064a\u0629',
+    systemErrors: '\u0623\u062e\u0637\u0627\u0621 \u0627\u0644\u0646\u0638\u0627\u0645',
+    disconnect: '\u0625\u0644\u063a\u0627\u0621 \u0627\u0644\u0631\u0628\u0637',
+    disconnecting: '\u062c\u0627\u0631\u064d \u0641\u0635\u0644 \u0627\u0644\u0631\u0628\u0637...',
+    test: '\u0627\u062e\u062a\u0628\u0627\u0631 \u0627\u0644\u0627\u062a\u0635\u0627\u0644',
+    testing: '\u062c\u0627\u0631\u064d \u0627\u0644\u0627\u062e\u062a\u0628\u0627\u0631...',
+    save: '\u062d\u0641\u0638 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a',
+    saving: '\u062c\u0627\u0631\u064d \u0627\u0644\u062d\u0641\u0638...',
+    connected: '\u0645\u062a\u0635\u0644',
+    notVerified: '\u0645\u062d\u0641\u0648\u0638 \u0648\u0644\u0645 \u064a\u064f\u062e\u062a\u0628\u0631',
+    needsReconnect: '\u064a\u062d\u062a\u0627\u062c \u0625\u0639\u0627\u062f\u0629 \u0631\u0628\u0637',
+    serverConfig: '\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u062e\u0627\u062f\u0645 \u0646\u0627\u0642\u0635',
+    disconnected: '\u063a\u064a\u0631 \u0645\u062a\u0635\u0644',
+    hintServer: '\u0627\u0644\u0631\u0628\u0637 \u0627\u0644\u0645\u062d\u0641\u0648\u0638 \u0645\u0648\u062c\u0648\u062f\u060c \u0644\u0643\u0646 \u0627\u0644\u062e\u0627\u062f\u0645 \u0644\u0627 \u064a\u0645\u0644\u0643 \u0625\u0639\u062f\u0627\u062f \u0627\u0644\u062a\u0634\u0641\u064a\u0631 \u0627\u0644\u0645\u0637\u0644\u0648\u0628. \u0623\u0643\u0645\u0644 \u0625\u0639\u062f\u0627\u062f \u0627\u0644\u062e\u0627\u062f\u0645 \u0623\u0648 \u0623\u0639\u062f \u0627\u0644\u0631\u0628\u0637 \u0628\u062a\u0648\u0643\u0646 \u062c\u062f\u064a\u062f.',
+    hintReconnect: '\u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0631\u0628\u0637 \u0627\u0644\u0645\u062d\u0641\u0648\u0638\u0629 \u0644\u0645 \u062a\u0639\u062f \u0642\u0627\u0628\u0644\u0629 \u0644\u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645. \u0623\u0639\u062f \u062d\u0641\u0638 \u0627\u0644\u062a\u0648\u0643\u0646 \u0648Chat ID \u0645\u0646 \u062c\u062f\u064a\u062f.',
+    hintConnected: '\u0627\u0644\u0631\u0628\u0637 \u064a\u0639\u0645\u0644 \u0628\u0634\u0643\u0644 \u0637\u0628\u064a\u0639\u064a \u0648\u0633\u064a\u062a\u0645 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u062a\u0646\u0628\u064a\u0647\u0627\u062a \u062d\u0633\u0628 \u0627\u0644\u0623\u0646\u0648\u0627\u0639 \u0627\u0644\u0645\u062d\u062f\u062f\u0629.',
+    hintNotVerified: '\u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u0645\u062d\u0641\u0648\u0638\u0629\u060c \u0644\u0643\u0646 \u064a\u064f\u0641\u0636\u0644 \u0625\u0631\u0633\u0627\u0644 \u0631\u0633\u0627\u0644\u0629 \u0627\u062e\u062a\u0628\u0627\u0631 \u0642\u0628\u0644 \u0627\u0644\u0627\u0639\u062a\u0645\u0627\u062f \u0627\u0644\u0643\u0627\u0645\u0644.',
+    hintDisconnected: '\u0623\u062f\u062e\u0644 Bot Token \u0648Chat ID \u062b\u0645 \u0627\u062d\u0641\u0638 \u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a \u0648\u0627\u062e\u062a\u0628\u0631 \u0627\u0644\u0627\u062a\u0635\u0627\u0644.',
+    enterChatId: '\u0623\u062f\u062e\u0644 Chat ID \u0623\u0648\u0644\u0627\u064b',
+    enterBotToken: '\u0623\u062f\u062e\u0644 Bot Token \u0623\u0648\u0644\u0627\u064b',
+    saveSuccess: '\u062a\u0645 \u062d\u0641\u0638 \u0625\u0639\u062f\u0627\u062f\u0627\u062a \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645 \u0628\u0646\u062c\u0627\u062d',
+    saveError: '\u062a\u0639\u0630\u0631 \u062d\u0641\u0638 \u0625\u0639\u062f\u0627\u062f\u0627\u062a \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645',
+    testSuccess: '\u062a\u0645 \u0625\u0631\u0633\u0627\u0644 \u0631\u0633\u0627\u0644\u0629 \u0627\u062e\u062a\u0628\u0627\u0631 \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645 \u0628\u0646\u062c\u0627\u062d',
+    testError: '\u0641\u0634\u0644 \u0627\u062e\u062a\u0628\u0627\u0631 \u0627\u0644\u0631\u0628\u0637 \u0645\u0639 \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645',
+    disconnectSuccess: '\u062a\u0645 \u0625\u0644\u063a\u0627\u0621 \u0631\u0628\u0637 \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645 \u0628\u0646\u062c\u0627\u062d',
+    disconnectError: '\u062a\u0639\u0630\u0631 \u0625\u0644\u063a\u0627\u0621 \u0631\u0628\u0637 \u062a\u064a\u0644\u064a\u062c\u0631\u0627\u0645',
+  };
+
+  const telegramStatusMeta =
+    telegramSettings.connectionStatus === 'connected'
+      ? {
+          label: telegramUiCopy.connected,
+          className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        }
+      : telegramSettings.connectionStatus === 'not_verified'
+      ? {
+          label: telegramUiCopy.notVerified,
+          className: 'bg-amber-50 text-amber-700 border-amber-200',
+        }
+      : telegramSettings.connectionStatus === 'needs_reconnect'
+      ? {
+          label: telegramUiCopy.needsReconnect,
+          className: 'bg-orange-50 text-orange-700 border-orange-200',
+        }
+      : telegramSettings.connectionStatus === 'server_config_required'
+      ? {
+          label: telegramUiCopy.serverConfig,
+          className: 'bg-rose-50 text-rose-700 border-rose-200',
+        }
+      : {
+          label: telegramUiCopy.disconnected,
+          className: 'bg-slate-100 text-slate-600 border-slate-200',
+        };
+
+  const telegramStatusHint = telegramSettings.requiresServerConfig
+    ? telegramUiCopy.hintServer
+    : telegramSettings.requiresReconnect
+    ? telegramUiCopy.hintReconnect
+    : telegramSettings.connectionStatus === 'connected'
+    ? telegramUiCopy.hintConnected
+    : telegramSettings.connectionStatus === 'not_verified'
+    ? telegramUiCopy.hintNotVerified
+    : telegramUiCopy.hintDisconnected;
   return (
     <Motion.div
       initial={{ opacity: 0 }}
@@ -1264,7 +1363,7 @@ const AdminCMS = ({
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex flex-col md:flex-row justify-between md:items-center gap-3">
           <div>
             <h1 className="text-xl md:text-2xl font-black admin-title flex items-center gap-2">
-              <ShieldCheck className="text-emerald-600" /> لوحة التحكم المركزية
+              <ShieldCheck className="text-emerald-600" /> {'\u0644\u0648\u062d\u0629 \u0627\u0644\u062a\u062d\u0643\u0645 \u0627\u0644\u0645\u0631\u0643\u0632\u064a\u0629'}
             </h1>
             <p className={`text-xs font-bold mt-1 ${isDarkMode ? "text-slate-300" : "text-slate-500"}`} dir="ltr">{adminUser?.email || 'admin'}</p>
           </div>
@@ -1277,7 +1376,7 @@ const AdminCMS = ({
                   : 'bg-orange-50 text-orange-700 border-orange-200'
               }`}
             >
-              {siteConfig.isOnline ? 'المتجر مفتوح' : 'وضع الصيانة'}
+              {siteConfig.isOnline ? '\u0627\u0644\u0645\u062a\u062c\u0631 \u0645\u0641\u062a\u0648\u062d' : '\u0627\u0644\u0645\u062a\u062c\u0631 \u0645\u063a\u0644\u0642'}
             </span>
             <span
               className={`px-3 py-1.5 rounded-full text-xs font-bold border ${
@@ -1288,7 +1387,7 @@ const AdminCMS = ({
                   : 'bg-slate-100 text-slate-600 border-slate-200'
               }`}
             >
-              {syncStatus === 'online' ? 'Firebase متصل' : syncStatus === 'syncing' ? 'جاري المزامنة' : 'وضع محلي'}
+              {syncStatus === 'online' ? 'Firebase \u0645\u062a\u0635\u0644' : syncStatus === 'syncing' ? '\u062c\u0627\u0631\u064d \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629' : '\u063a\u064a\u0631 \u0645\u062a\u0635\u0644'}
             </span>
             <div className={`inline-flex items-center rounded-xl border p-1 ${isDarkMode ? 'admin-soft' : 'bg-white border-slate-200'}`}>
               <button
@@ -1297,7 +1396,7 @@ const AdminCMS = ({
                   isDarkMode ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <MoonStar size={14} /> وضع ليل
+                <MoonStar size={14} /> {'\u0648\u0636\u0639 \u0644\u064a\u0644\u064a'}
               </button>
               <button
                 onClick={() => setAdminTheme('light')}
@@ -1305,15 +1404,15 @@ const AdminCMS = ({
                   !isDarkMode ? 'bg-emerald-500 text-white' : 'text-slate-300 hover:bg-slate-800/60'
                 }`}
               >
-                <SunMedium size={14} /> وضع صباح
+                <SunMedium size={14} /> {'\u0648\u0636\u0639 \u0646\u0647\u0627\u0631\u064a'}
               </button>
             </div>
             <button
               onClick={() => onLogout()}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition"
-              title="خروج"
+              title={'\u062e\u0631\u0648\u062c'}
             >
-              <LogOut size={16} /> خروج
+              <LogOut size={16} /> {'\u062e\u0631\u0648\u062c'}
             </button>
           </div>
         </div>
@@ -1326,7 +1425,7 @@ const AdminCMS = ({
               <div className="flex items-center gap-2 font-black text-sm">
                 <Sparkles size={16} /> Dashboard Modern
               </div>
-              <p className="text-[11px] text-emerald-50 mt-1">تنقل سريع بين الأقسام الأساسية</p>
+              <p className="text-[11px] text-emerald-50 mt-1">{'\u062a\u0646\u0642\u0644 \u0633\u0631\u064a\u0639 \u0628\u064a\u0646 \u0627\u0644\u0623\u0642\u0633\u0627\u0645 \u0627\u0644\u0623\u0633\u0627\u0633\u064a\u0629'}</p>
             </div>
 
             <div className="flex lg:flex-col gap-2 overflow-x-auto no-scrollbar pb-1 lg:pb-0">
@@ -1336,7 +1435,7 @@ const AdminCMS = ({
                   activeTab === 'dashboard' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <LayoutDashboard size={18} /> نظرة عامة
+                <LayoutDashboard size={18} /> {'\u0646\u0638\u0631\u0629 \u0639\u0627\u0645\u0629'}
               </button>
               <button
                 onClick={() => setActiveTab('orders')}
@@ -1344,7 +1443,7 @@ const AdminCMS = ({
                   activeTab === 'orders' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <ShoppingCart size={18} /> الطلبات
+                <ShoppingCart size={18} /> {'\u0627\u0644\u0637\u0644\u0628\u0627\u062a'}
               </button>
               <button
                 onClick={() => setActiveTab('products')}
@@ -1352,7 +1451,7 @@ const AdminCMS = ({
                   activeTab === 'products' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <Store size={18} /> المنتجات
+                <Store size={18} /> {'\u0627\u0644\u0645\u0646\u062a\u062c\u0627\u062a'}
               </button>
               <button
                 onClick={() => setActiveTab('marketing')}
@@ -1360,7 +1459,7 @@ const AdminCMS = ({
                   activeTab === 'marketing' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <Megaphone size={18} /> التسويق
+                <Megaphone size={18} /> {'\u0627\u0644\u062a\u0633\u0648\u064a\u0642'}
               </button>
               <button
                 onClick={() => setActiveTab('telegram')}
@@ -1379,7 +1478,7 @@ const AdminCMS = ({
                   activeTab === 'settings' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <Settings size={18} /> الإعدادات
+                <Settings size={18} /> {'\u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a'}
               </button>
               <button
                 onClick={() => setActiveTab('security')}
@@ -1387,7 +1486,7 @@ const AdminCMS = ({
                   activeTab === 'security' ? (isDarkMode ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-white shadow-lg shadow-slate-900/10') : (isDarkMode ? 'nav-btn--inactive text-slate-200 hover:bg-slate-800/70' : 'nav-btn--inactive text-slate-600 hover:bg-slate-100')
                 }`}
               >
-                <ShieldAlert size={18} /> مراقبة الموقع
+                <ShieldAlert size={18} /> {'\u0645\u0631\u0627\u0642\u0628\u0629 \u0627\u0644\u0645\u0648\u0642\u0639'}
               </button>
             </div>
           </div>
@@ -1396,14 +1495,14 @@ const AdminCMS = ({
         <div className="flex-1 w-full overflow-hidden">
           {activeTab === 'dashboard' && (
             <div className="space-y-6 animate-in fade-in">
-              <h2 className="text-2xl font-black text-slate-900 mb-6">الإحصائيات الرئيسية</h2>
+              <h2 className="text-2xl font-black text-slate-900 mb-6">{'\u0627\u0644\u0625\u062d\u0635\u0627\u0626\u064a\u0627\u062a \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629'}</h2>
 
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-slate-50 p-5 rounded-3xl border border-gray-100">
                   <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center mb-3">
                     <Package size={20} />
                   </div>
-                  <p className="text-sm font-bold text-gray-500 mb-1">الطلبات</p>
+                  <p className="text-sm font-bold text-gray-500 mb-1">{'\u0627\u0644\u0637\u0644\u0628\u0627\u062a'}</p>
                   <p className="text-2xl font-black">{orders.length}</p>
                 </div>
 
@@ -1411,7 +1510,7 @@ const AdminCMS = ({
                   <div className="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center mb-3">
                     <ShoppingCart size={20} />
                   </div>
-                  <p className="text-sm font-bold text-gray-500 mb-1">قيد المعالجة</p>
+                  <p className="text-sm font-bold text-gray-500 mb-1">{'\u0642\u064a\u062f \u0627\u0644\u0645\u0639\u0627\u0644\u062c\u0629'}</p>
                   <p className="text-2xl font-black">{pendingOrdersCount}</p>
                 </div>
 
@@ -1419,7 +1518,7 @@ const AdminCMS = ({
                   <div className="w-10 h-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center mb-3">
                     <CheckCircle size={20} />
                   </div>
-                  <p className="text-sm font-bold text-gray-500 mb-1">تم التسليم</p>
+                  <p className="text-sm font-bold text-gray-500 mb-1">{'\u062a\u0645 \u0627\u0644\u062a\u0633\u0644\u064a\u0645'}</p>
                   <p className="text-2xl font-black">{deliveredOrdersCount}</p>
                 </div>
 
@@ -1427,26 +1526,26 @@ const AdminCMS = ({
                   <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center mb-3">
                     <CreditCard size={20} />
                   </div>
-                  <p className="text-sm font-bold text-gray-500 mb-1">الإيرادات</p>
-                  <p className="text-xl font-black text-emerald-600">{revenue} د.ج</p>
+                  <p className="text-sm font-bold text-gray-500 mb-1">{'\u0627\u0644\u0625\u064a\u0631\u0627\u062f\u0627\u062a'}</p>
+                  <p className="text-xl font-black text-emerald-600">{formatMoney(revenue)}</p>
                 </div>
 
                 <div className="bg-slate-50 p-5 rounded-3xl border border-gray-100">
                   <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center mb-3">
                     <AlertTriangle size={20} />
                   </div>
-                  <p className="text-sm font-bold text-gray-500 mb-1">مخزون منخفض</p>
+                  <p className="text-sm font-bold text-gray-500 mb-1">{'\u0645\u062e\u0632\u0648\u0646 \u0645\u0646\u062e\u0641\u0636'}</p>
                   <p className="text-2xl font-black">{lowStockProducts.length}</p>
                 </div>
               </div>
               <div className="mt-8 rounded-2xl border border-gray-200 bg-white p-6 text-center">
-                <p className="font-black text-slate-900 mb-2">عرض الطلبات أصبح في قسم مستقل</p>
-                <p className="text-sm font-bold text-gray-500 mb-4">اضغط على تبويب "الطلبات" لإدارة جميع الطلبات بالتفصيل.</p>
+                <p className="font-black text-slate-900 mb-2">{'\u0639\u0631\u0636 \u0627\u0644\u0637\u0644\u0628\u0627\u062a \u0623\u0635\u0628\u062d \u0641\u064a \u0642\u0633\u0645 \u0645\u0633\u062a\u0642\u0644'}</p>
+                <p className="text-sm font-bold text-gray-500 mb-4">{'\u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u062a\u0628\u0648\u064a\u0628 "\u0627\u0644\u0637\u0644\u0628\u0627\u062a" \u0644\u0625\u062f\u0627\u0631\u0629 \u062c\u0645\u064a\u0639 \u0627\u0644\u0637\u0644\u0628\u0627\u062a \u0628\u0627\u0644\u062a\u0641\u0635\u064a\u0644.'}</p>
                 <button
                   onClick={() => setActiveTab('orders')}
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 text-white font-black"
                 >
-                  <ShoppingCart size={16} /> فتح قسم الطلبات
+                  <ShoppingCart size={16} /> {'\u0641\u062a\u062d \u0642\u0633\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062a'}
                 </button>
               </div>
             </div>
@@ -1455,8 +1554,8 @@ const AdminCMS = ({
           {activeTab === 'orders' && (
             <div className="space-y-6 animate-in fade-in">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2"><CalendarDays size={22} />{'إدارة الطلبيات'}</h2>
-                <div className="text-sm font-bold text-gray-500">{filteredOrders.length} طلب</div>
+                <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2"><CalendarDays size={22} />{'\u0625\u062f\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062a'}</h2>
+                <div className="text-sm font-bold text-gray-500">{filteredOrders.length} {'\u0637\u0644\u0628'}</div>
               </div>
 
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
@@ -1480,7 +1579,7 @@ const AdminCMS = ({
               {orderPeriodFilter === 'custom' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">{'من تاريخ'}</label>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">{'\u0645\u0646 \u062a\u0627\u0631\u064a\u062e'}</label>
                     <input
                       type="date"
                       value={customDateFrom}
@@ -1489,7 +1588,7 @@ const AdminCMS = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">{'إلى تاريخ'}</label>
+                    <label className="block text-xs font-bold text-gray-500 mb-1">{'\u0625\u0644\u0649 \u062a\u0627\u0631\u064a\u062e'}</label>
                     <input
                       type="date"
                       value={customDateTo}
@@ -1507,7 +1606,7 @@ const AdminCMS = ({
                     type="text"
                     value={orderSearch}
                     onChange={(event) => setOrderSearch(event.target.value)}
-                    placeholder={'بحث بالاسم أو الهاتف أو الولاية'}
+                    placeholder={'\u0628\u062d\u062b \u0628\u0627\u0644\u0627\u0633\u0645 \u0623\u0648 \u0627\u0644\u0647\u0627\u062a\u0641 \u0623\u0648 \u0627\u0644\u0648\u0644\u0627\u064a\u0629'}
                     className="w-full bg-white border border-gray-200 rounded-xl pr-9 pl-4 py-3 font-bold outline-none focus:ring-2 focus:ring-slate-900/10"
                   />
                 </div>
@@ -1518,7 +1617,7 @@ const AdminCMS = ({
                     onChange={(event) => setOrderStatusFilter(event.target.value)}
                     className="w-full bg-white border border-gray-200 rounded-xl pr-9 pl-3 py-3 font-bold outline-none focus:ring-2 focus:ring-slate-900/10"
                   >
-                    <option value="all">{'كل الحالات'}</option>
+                    <option value="all">{'\u0643\u0644 \u0627\u0644\u062d\u0627\u0644\u0627\u062a'}</option>
                     {ORDER_STATUSES.map((status) => (
                       <option value={status.key} key={status.key}>
                         {status.label}
@@ -1530,22 +1629,22 @@ const AdminCMS = ({
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-bold text-slate-500">{'عدد الطلبيات'}</p>
+                  <p className="text-xs font-bold text-slate-500">{'\u0643\u0644 \u0627\u0644\u0637\u0644\u0628\u0627\u062a'}</p>
                   <p className="text-xl font-black text-slate-900">{filteredOrders.length}</p>
                 </div>
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                  <p className="text-xs font-bold text-amber-700">{'قيد المعالجة'}</p>
+                  <p className="text-xs font-bold text-amber-700">{'\u0643\u0644 \u0627\u0644\u0637\u0644\u0628\u0627\u062a'}</p>
                   <p className="text-xl font-black text-amber-800">{filteredOrdersPending}</p>
                 </div>
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 col-span-2">
-                  <p className="text-xs font-bold text-emerald-700">{'قيمة الطلبيات'}</p>
+                  <p className="text-xs font-bold text-emerald-700">{'\u0642\u064a\u0645\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062a'}</p>
                   <p className="text-xl font-black text-emerald-800">{formatMoney(filteredOrdersRevenue)}</p>
                 </div>
               </div>
 
               {filteredOrders.length === 0 ? (
                 <div className="text-center py-12 bg-gray-50 rounded-2xl border border-gray-100 text-gray-400 font-bold">
-                  لا توجد نتائج مطابقة
+                  {'\u0644\u0627 \u062a\u0648\u062c\u062f \u0637\u0644\u0628\u0627\u062a \u0645\u0637\u0627\u0628\u0642\u0629'}
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -1554,9 +1653,9 @@ const AdminCMS = ({
                       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                         <div>
                           <p className="font-black text-slate-900 text-lg">{order.customer.name}</p>
-                          <p className="text-sm text-gray-500 font-bold">{order.customer.wilaya_name || order.customer.wilaya} • {order.customer.commune_name || order.customer.commune || order.customer.city}</p>
+                          <p className="text-sm text-gray-500 font-bold">{order.customer.wilaya_name || order.customer.wilaya} - {order.customer.commune_name || order.customer.commune || order.customer.city}</p>
                           <p className="text-sm text-gray-500 font-bold">{order.customer.phone}</p>
-                          <p className="text-xs text-gray-400 mt-1">#{String(order.id).slice(-6)} • {formatOrderDate(order.date)}</p>
+                          <p className="text-xs text-gray-400 mt-1">#{String(order.id).slice(-6)} - {formatOrderDate(order.date)}</p>
                         </div>
                         <div className="flex items-center gap-2">
                           <select
@@ -1575,7 +1674,7 @@ const AdminCMS = ({
                       </div>
 
                       <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
-                        <p className="text-xs font-black text-gray-500 mb-2">المنتجات</p>
+                        <p className="text-xs font-black text-gray-500 mb-2">{'\u0627\u0644\u0645\u0646\u062a\u062c\u0627\u062a'}</p>
                         <div className="space-y-1">
                           {order.items.map((item) => (
                             <div key={`${order.id}-${item.cartKey || buildCartItemKey(item)}`} className="flex items-center justify-between text-sm font-bold text-slate-700">
@@ -1583,9 +1682,9 @@ const AdminCMS = ({
                                 {item.name}
                                 {(item.selectedSize || item.selectedColor) && (
                                   <span className="text-[10px] text-slate-500 mr-2">
-                                    {item.selectedSize ? 'مقاس: ' + item.selectedSize : ''}
+                                    {item.selectedSize ? '\u0627\u0644\u0645\u0642\u0627\u0633: ' + item.selectedSize : ''}
                                     {item.selectedSize && item.selectedColor ? ' | ' : ''}
-                                    {item.selectedColor ? 'لون: ' + item.selectedColor : ''}
+                                    {item.selectedColor ? '\u0627\u0644\u0644\u0648\u0646: ' + item.selectedColor : ''}
                                   </span>
                                 )}
                               </span>
@@ -1596,8 +1695,8 @@ const AdminCMS = ({
                       </div>
 
                       <div className="flex flex-wrap items-center gap-4 text-sm font-bold">
-                        <span className="text-gray-500">فرعي: {order.subtotal} د.ج</span>
-                        {order.discount > 0 && <span className="text-emerald-600">خصم: -{order.discount} د.ج</span>}
+                        <span className="text-gray-500">المجموع الفرعي: {order.subtotal} د.ج</span>
+                        {order.discount > 0 && <span className="text-emerald-600">الخصم: -{order.discount} د.ج</span>}
                         {order.couponCode && <span className="text-gray-500" dir="ltr">{order.couponCode}</span>}
                         <span className="text-slate-900">الإجمالي: {order.totalPrice} د.ج</span>
                       </div>
@@ -1610,7 +1709,7 @@ const AdminCMS = ({
           {activeTab === 'products' && (
             <div className="space-y-6 animate-in fade-in">
               <div className="flex flex-col md:flex-row justify-between md:items-center gap-3">
-                <h2 className="text-2xl font-black text-slate-900">إدارة المنتجات والمخزون</h2>
+                <h2 className="text-2xl font-black text-slate-900">إدارة المنتجات والتصنيفات</h2>
                 <button
                   onClick={() => {
                     resetProductForm();
@@ -1626,10 +1725,10 @@ const AdminCMS = ({
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                   <div>
                     <h3 className="text-sm md:text-base font-black text-slate-900">إدارة التصنيفات</h3>
-                    <p className="text-xs font-bold text-slate-500">إضافة، تعديل، أو حذف التصنيفات من هنا.</p>
+                    <p className="text-xs font-bold text-slate-500">أضف أو عدل أو احذف التصنيفات من هنا.</p>
                   </div>
                   <div className="flex w-full md:w-auto gap-2">
-                    <input type="text" value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value)} placeholder="تصنيف جديد" className="w-full md:w-56 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-slate-900" />
+                    <input type="text" value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value)} placeholder="اسم التصنيف" className="w-full md:w-56 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-slate-900" />
                     <button type="button" onClick={handleAddCategory} className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black">إضافة</button>
                   </div>
                 </div>
@@ -1653,7 +1752,7 @@ const AdminCMS = ({
                   type="text"
                   value={productQuery}
                   onChange={(event) => setProductQuery(event.target.value)}
-                  placeholder={'بحث عن منتج...'}
+                  placeholder={'ابحث عن منتج...'}
                   className="md:col-span-2 w-full bg-white border border-gray-200 rounded-xl px-4 py-3 font-bold outline-none focus:ring-2 focus:ring-slate-900/10"
                 />
                 <select
@@ -1668,7 +1767,7 @@ const AdminCMS = ({
               </div>
 
               {showProductForm ? (                <form onSubmit={handleSaveProduct} className="bg-slate-50 p-6 md:p-8 rounded-[2rem] border border-gray-200">
-                  <h3 className="font-black text-xl mb-6">{editingProduct ? 'تعديل المنتج' : 'نشر منتج جديد'}</h3>
+                  <h3 className="font-black text-xl mb-6">{editingProduct ? 'تعديل المنتج' : 'إضافة منتج جديد'}</h3>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                     <div className="md:col-span-2">
                       <label className="block text-sm font-bold mb-2">اسم المنتج</label>
@@ -1681,7 +1780,7 @@ const AdminCMS = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-bold mb-2">القسم</label>
+                      <label className="block text-sm font-bold mb-2">التصنيف</label>
                       <select
                         required
                         value={productForm.category}
@@ -1701,14 +1800,14 @@ const AdminCMS = ({
                       rows={4}
                       value={productForm.description}
                       onChange={(event) => setProductForm({ ...productForm, description: event.target.value })}
-                      placeholder="اكتب وصفًا واضحًا للزبون..."
+                      placeholder="اكتب وصفًا واضحًا يساعد الزبون على الشراء..."
                       className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900 resize-y"
                     />
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <div>
-                      <label className="block text-sm font-bold mb-2">السعر الحالي (د.ج)</label>
+                      <label className="block text-sm font-bold mb-2">سعر البيع (د.ج)</label>
                       <input
                         required
                         type="number"
@@ -1771,7 +1870,7 @@ const AdminCMS = ({
                         className="w-full p-2 rounded-xl border border-dashed border-gray-300 bg-white text-xs font-bold"
                       />
                       <p className="text-[11px] text-slate-500 font-bold mt-1">
-                        يتطلب المتغير `VITE_IMGBB_API_KEY` في `.env` (الحد الأقصى 8MB).
+                        يجب ضبط المفتاح `VITE_IMGBB_API_KEY` داخل `.env` (الحد الأقصى 8MB).
                       </p>
                       {imageUploadState.isUploading && (
                         <div className="mt-2">
@@ -1782,7 +1881,7 @@ const AdminCMS = ({
                             />
                           </div>
                           <p className="mt-1 text-[11px] font-black text-emerald-700">
-                            جاري الرفع... {imageUploadState.progress}%
+                            جارٍ الرفع... {imageUploadState.progress}%
                           </p>
                         </div>
                       )}
@@ -1795,7 +1894,7 @@ const AdminCMS = ({
 
                       <div className="mt-3 space-y-2">
                         {(!Array.isArray(productForm.images) || productForm.images.length === 0) ? (
-                          <div className="rounded-xl border border-dashed border-gray-300 p-3 text-xs font-bold text-gray-500">أضف صورة واحدة على الأقل.</div>
+                          <div className="rounded-xl border border-dashed border-gray-300 p-3 text-xs font-bold text-gray-500">لا توجد صور مضافة بعد.</div>
                         ) : (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {productForm.images.map((imageUrl, imageIndex) => (
@@ -1803,8 +1902,8 @@ const AdminCMS = ({
                                 <img src={imageUrl} alt={productForm.name || 'product'} className="h-24 w-full object-cover rounded-lg bg-slate-100" loading="lazy" decoding="async" />
                                 <div className="flex flex-wrap gap-1">
                                   <button type="button" onClick={() => handleSetPrimaryProductImage(imageIndex)} className="px-2 py-1 rounded-md text-[10px] font-black border border-slate-200 bg-slate-50">رئيسية</button>
-                                  <button type="button" onClick={() => handleMoveProductImage(imageIndex, -1)} disabled={imageIndex === 0} className="px-2 py-1 rounded-md text-[10px] font-black border border-slate-200 bg-slate-50 disabled:opacity-40">لأمام</button>
-                                  <button type="button" onClick={() => handleMoveProductImage(imageIndex, 1)} disabled={imageIndex === productForm.images.length - 1} className="px-2 py-1 rounded-md text-[10px] font-black border border-slate-200 bg-slate-50 disabled:opacity-40">للخلف</button>
+                                  <button type="button" onClick={() => handleMoveProductImage(imageIndex, -1)} disabled={imageIndex === 0} className="px-2 py-1 rounded-md text-[10px] font-black border border-slate-200 bg-slate-50 disabled:opacity-40">للأعلى</button>
+                                  <button type="button" onClick={() => handleMoveProductImage(imageIndex, 1)} disabled={imageIndex === productForm.images.length - 1} className="px-2 py-1 rounded-md text-[10px] font-black border border-slate-200 bg-slate-50 disabled:opacity-40">للأسفل</button>
                                   <button type="button" onClick={() => handleRemoveProductImage(imageIndex)} className="px-2 py-1 rounded-md text-[10px] font-black border border-red-200 text-red-600 bg-red-50">حذف</button>
                                 </div>
                               </div>
@@ -1815,7 +1914,7 @@ const AdminCMS = ({
                     </div>
 
                     <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4">
-                      <p className="font-black text-sm">السمات الديناميكية</p>
+                      <p className="font-black text-sm">خيارات المنتج</p>
 
                       <div className="flex items-center justify-between">
                         <label className="text-sm font-bold inline-flex items-center gap-1"><Ruler size={14} /> تفعيل المقاسات</label>
@@ -1853,8 +1952,8 @@ const AdminCMS = ({
                             }
                             className="w-full p-2 rounded-lg border border-gray-300 text-sm font-bold"
                           >
-                            <option value="clothing">مقاسات ملابس (S-XXL)</option>
-                            <option value="shoes">مقاسات أحذية (37-45)</option>
+                            <option value="clothing">مقاسات الملابس (S-XXL)</option>
+                            <option value="shoes">مقاسات الأحذية (37-45)</option>
                           </select>
 
                           <div className="flex flex-wrap gap-2">
@@ -1934,7 +2033,7 @@ const AdminCMS = ({
 
                   <div className="flex gap-3">
                     <button type="submit" className="flex-1 bg-emerald-500 text-white font-black py-3 rounded-xl shadow-md">
-                      {editingProduct ? 'حفظ التعديلات' : 'نشر المنتج'}
+                      {editingProduct ? 'حفظ التعديلات' : 'حفظ المنتج'}
                     </button>
                     <button
                       type="button"
@@ -1956,7 +2055,7 @@ const AdminCMS = ({
                           <p className="font-bold text-sm truncate mb-1">{product.name}</p>
                           <p className="text-[11px] font-black text-slate-500 mb-1">{product.category}</p>
                           {product.description && <p className="text-[11px] font-bold text-slate-500 line-clamp-2 mb-2">{product.description}</p>}
-                          <p className="font-black text-emerald-600 mb-1">{product.price} د.ج</p>
+                          <p className="font-black text-emerald-600 mb-1">{formatMoney(product.price)}</p>
                           <p
                             className={`text-xs font-black mb-4 ${
                               stock === 0 ? 'text-red-600' : stock <= 3 ? 'text-orange-600' : 'text-gray-500'
@@ -2016,62 +2115,80 @@ const AdminCMS = ({
 
           {activeTab === 'telegram' && (
             <div className="space-y-6 animate-in fade-in max-w-4xl">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-2xl font-black text-slate-900 inline-flex items-center gap-2"><MessageCircle size={22} /> ربط تيليجرام</h2>
-                <span
-                  className={
-                    'px-3 py-1.5 rounded-full text-xs font-black border ' +
-                    (telegramSettings.connectionStatus === 'connected'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : telegramSettings.connectionStatus === 'not_verified'
-                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : 'bg-slate-100 text-slate-600 border-slate-200')
-                  }
-                >
-                  {telegramSettings.connectionStatus === 'connected' ? 'متصل' : telegramSettings.connectionStatus === 'not_verified' ? 'غير مؤكد' : 'غير متصل'}
-                </span>
-              </div>
-
-              <div className="bg-white border border-gray-200 p-6 md:p-8 rounded-[2rem] space-y-6">
-                <div className="flex justify-end">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className={`inline-flex items-center gap-2 text-2xl font-black ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}><MessageCircle size={22} /> {telegramUiCopy.title}</h2>
+                  <p className={`mt-2 text-sm font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{telegramStatusHint}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`px-3 py-1.5 rounded-full text-xs font-black border ${telegramStatusMeta.className}`}>
+                    {telegramStatusMeta.label}
+                  </span>
                   <button
                     type="button"
                     onClick={() => loadTelegramSettings(false)}
-                    disabled={isTelegramLoading}
-                    className="px-3 py-2 rounded-xl text-xs font-black border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                    disabled={isTelegramLoading || isTelegramSaving || isTelegramTesting || isTelegramDisconnecting}
+                    className={`rounded-xl border px-3 py-2 text-xs font-black transition disabled:opacity-60 ${
+                      isDarkMode
+                        ? 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
                   >
-                    {isTelegramLoading ? 'جارٍ التحميل...' : 'تحديث'}
+                    {isTelegramLoading ? telegramUiCopy.refreshing : telegramUiCopy.refresh}
                   </button>
                 </div>
+              </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className={`space-y-6 rounded-[2rem] border p-5 md:p-8 ${isDarkMode ? 'border-slate-800 bg-slate-950/70 text-slate-100 shadow-[0_24px_60px_rgba(2,6,23,0.45)]' : 'border-gray-200 bg-white text-slate-900 shadow-[0_20px_55px_rgba(15,23,42,0.08)]'}`}>
+                <div className={`rounded-2xl border px-4 py-4 ${isDarkMode ? 'border-slate-800 bg-slate-900/70' : 'border-slate-200 bg-slate-50/80'}`}>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className={`text-sm font-black ${isDarkMode ? 'text-slate-200' : 'text-slate-900'}`}>{telegramUiCopy.currentStatusTitle}</p>
+                      <p className={`mt-1 text-sm font-bold leading-6 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{telegramStatusHint}</p>
+                    </div>
+                    {telegramSettings.lastTestAt ? (
+                      <span className={`text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {telegramUiCopy.lastTest}: {new Date(telegramSettings.lastTestAt).toLocaleString('ar-DZ')}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                {telegramSettings.lastError ? (
+                  <div className={`rounded-2xl border px-4 py-3 text-sm font-bold leading-6 ${isDarkMode ? 'border-rose-900/60 bg-rose-950/40 text-rose-200' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
+                    {telegramSettings.lastError}
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2" dir="ltr">Bot Token</label>
+                    <label className={`mb-2 block text-sm font-black ${isDarkMode ? 'text-slate-200' : 'text-gray-700'}`} dir="ltr">{telegramUiCopy.tokenLabel}</label>
                     <input
                       type="password"
                       dir="ltr"
                       value={telegramSettings.botToken}
                       onChange={(event) => setTelegramSettings((previous) => ({ ...previous, botToken: event.target.value }))}
-                      placeholder={telegramSettings.hasToken ? 'أدخل Token جديد للتحديث (اختياري)' : 'أدخل Bot Token'}
-                      className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900"
+                      placeholder={telegramSettings.hasToken ? telegramUiCopy.tokenPlaceholderUpdate : telegramUiCopy.tokenPlaceholderNew}
+                      className={`w-full rounded-2xl border px-4 py-3 font-bold outline-none transition ${isDarkMode ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder:text-slate-500 focus:border-emerald-500' : 'border-gray-300 bg-white text-slate-900 placeholder:text-slate-400 focus:border-slate-900'}`}
                     />
-                    {telegramSettings.botTokenMasked && (
-                      <p className="mt-2 text-xs font-black text-slate-500" dir="ltr">المحفوظ: {telegramSettings.botTokenMasked}</p>
-                    )}
+                    {telegramSettings.botTokenMasked ? (
+                      <p className={`mt-2 text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`} dir="ltr">{telegramUiCopy.storedLabel}: {telegramSettings.botTokenMasked}</p>
+                    ) : null}
                   </div>
+
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2" dir="ltr">Chat ID</label>
+                    <label className={`mb-2 block text-sm font-black ${isDarkMode ? 'text-slate-200' : 'text-gray-700'}`} dir="ltr">{telegramUiCopy.chatLabel}</label>
                     <input
                       type="text"
                       dir="ltr"
                       value={telegramSettings.chatId}
                       onChange={(event) => setTelegramSettings((previous) => ({ ...previous, chatId: event.target.value }))}
-                      placeholder="مثال: -1001234567890"
-                      className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900"
+                      placeholder={telegramUiCopy.chatPlaceholder}
+                      className={`w-full rounded-2xl border px-4 py-3 font-bold outline-none transition ${isDarkMode ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder:text-slate-500 focus:border-emerald-500' : 'border-gray-300 bg-white text-slate-900 placeholder:text-slate-400 focus:border-slate-900'}`}
                     />
-                    {telegramSettings.chatIdMasked && (
-                      <p className="mt-2 text-xs font-black text-slate-500" dir="ltr">Masked: {telegramSettings.chatIdMasked}</p>
-                    )}
+                    {telegramSettings.chatIdMasked ? (
+                      <p className={`mt-2 text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`} dir="ltr">{telegramUiCopy.storedLabel}: {telegramSettings.chatIdMasked}</p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -2079,66 +2196,69 @@ const AdminCMS = ({
                   <button
                     type="button"
                     onClick={() => setTelegramSettings((previous) => ({ ...previous, enabled: !previous.enabled }))}
-                    className={
-                      'px-3 py-2 rounded-xl text-xs font-black border transition ' +
-                      (telegramSettings.enabled ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-600 border-slate-200')
-                    }
+                    className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+                      telegramSettings.enabled
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : isDarkMode
+                        ? 'border-slate-700 bg-slate-900 text-slate-300'
+                        : 'border-slate-200 bg-slate-50 text-slate-600'
+                    }`}
                   >
-                    {telegramSettings.enabled ? 'الإشعارات مفعّلة' : 'الإشعارات معطلة'}
+                    {telegramSettings.enabled ? telegramUiCopy.enabled : telegramUiCopy.disabled}
                   </button>
                 </div>
 
-                <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
-                  <p className="text-sm font-black text-slate-900">أنواع الإشعارات</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm font-bold text-slate-700">
-                    <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                      <span>طلب جديد</span>
-                      <input type="checkbox" checked={telegramSettings.notifications.newOrder} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, newOrder: event.target.checked } }))} className="w-4 h-4 accent-emerald-500" />
+                <div className={`rounded-2xl border p-4 ${isDarkMode ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-50/70'}`}>
+                  <p className={`text-sm font-black ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>{telegramUiCopy.typesTitle}</p>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className={`flex items-center justify-between rounded-xl border px-3 py-3 text-sm font-bold ${isDarkMode ? 'border-slate-700 bg-slate-950/60 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>
+                      <span>{telegramUiCopy.newOrder}</span>
+                      <input type="checkbox" checked={telegramSettings.notifications.newOrder} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, newOrder: event.target.checked } }))} className="h-4 w-4 accent-emerald-500" />
                     </label>
-                    <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                      <span>تغيير حالة الطلب</span>
-                      <input type="checkbox" checked={telegramSettings.notifications.orderStatus} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, orderStatus: event.target.checked } }))} className="w-4 h-4 accent-emerald-500" />
+                    <label className={`flex items-center justify-between rounded-xl border px-3 py-3 text-sm font-bold ${isDarkMode ? 'border-slate-700 bg-slate-950/60 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>
+                      <span>{telegramUiCopy.orderStatus}</span>
+                      <input type="checkbox" checked={telegramSettings.notifications.orderStatus} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, orderStatus: event.target.checked } }))} className="h-4 w-4 accent-emerald-500" />
                     </label>
-                    <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                      <span>عمليات إدارية</span>
-                      <input type="checkbox" checked={telegramSettings.notifications.adminActions} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, adminActions: event.target.checked } }))} className="w-4 h-4 accent-emerald-500" />
+                    <label className={`flex items-center justify-between rounded-xl border px-3 py-3 text-sm font-bold ${isDarkMode ? 'border-slate-700 bg-slate-950/60 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>
+                      <span>{telegramUiCopy.adminActions}</span>
+                      <input type="checkbox" checked={telegramSettings.notifications.adminActions} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, adminActions: event.target.checked } }))} className="h-4 w-4 accent-emerald-500" />
                     </label>
-                    <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
-                      <span>أخطاء النظام</span>
-                      <input type="checkbox" checked={telegramSettings.notifications.systemErrors} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, systemErrors: event.target.checked } }))} className="w-4 h-4 accent-emerald-500" />
+                    <label className={`flex items-center justify-between rounded-xl border px-3 py-3 text-sm font-bold ${isDarkMode ? 'border-slate-700 bg-slate-950/60 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>
+                      <span>{telegramUiCopy.systemErrors}</span>
+                      <input type="checkbox" checked={telegramSettings.notifications.systemErrors} onChange={(event) => setTelegramSettings((previous) => ({ ...previous, notifications: { ...previous.notifications, systemErrors: event.target.checked } }))} className="h-4 w-4 accent-emerald-500" />
                     </label>
                   </div>
                 </div>
 
-                {telegramSettings.lastTestAt && (
-                  <p className="text-xs font-black text-slate-500">آخر اختبار: {new Date(telegramSettings.lastTestAt).toLocaleString('ar-DZ')}</p>
-                )}
-                {telegramSettings.lastError && (
-                  <p className="text-xs font-black text-red-600">{telegramSettings.lastError}</p>
-                )}
-
-                <div className="flex flex-wrap gap-3 justify-end">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={handleDisconnectTelegramSettings}
+                    disabled={isTelegramDisconnecting || isTelegramSaving || isTelegramTesting || (!telegramSettings.hasToken && !telegramSettings.chatId && !telegramSettings.requiresReconnect && !telegramSettings.requiresServerConfig)}
+                    className={`w-full rounded-2xl px-5 py-3 text-sm font-black transition disabled:opacity-60 sm:w-auto ${isDarkMode ? 'border border-rose-900/60 bg-rose-500/15 text-rose-200 hover:bg-rose-500/20' : 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'}`}
+                  >
+                    {isTelegramDisconnecting ? telegramUiCopy.disconnecting : telegramUiCopy.disconnect}
+                  </button>
                   <button
                     type="button"
                     onClick={handleTestTelegramSettings}
-                    disabled={isTelegramTesting || isTelegramSaving || isTelegramLoading}
-                    className="bg-blue-600 text-white px-6 py-3 rounded-xl font-black shadow-lg disabled:opacity-60"
+                    disabled={isTelegramTesting || isTelegramSaving || isTelegramLoading || isTelegramDisconnecting}
+                    className="w-full rounded-2xl bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg transition hover:bg-blue-700 disabled:opacity-60 sm:w-auto"
                   >
-                    {isTelegramTesting ? 'جارٍ الاختبار...' : 'اختبار الاتصال'}
+                    {isTelegramTesting ? telegramUiCopy.testing : telegramUiCopy.test}
                   </button>
                   <button
                     type="button"
                     onClick={handleSaveTelegramSettings}
-                    disabled={isTelegramSaving || isTelegramLoading}
-                    className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg disabled:opacity-60"
+                    disabled={isTelegramSaving || isTelegramLoading || isTelegramDisconnecting}
+                    className="w-full rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-lg transition hover:bg-slate-800 disabled:opacity-60 sm:w-auto"
                   >
-                    {isTelegramSaving ? 'جارٍ الحفظ...' : 'حفظ الإعدادات'}
+                    {isTelegramSaving ? telegramUiCopy.saving : telegramUiCopy.save}
                   </button>
                 </div>
               </div>
             </div>
           )}
-
           {activeTab === 'security' && (
             <AdminSecurityCenter
               isDarkMode={isDarkMode}
@@ -2227,7 +2347,7 @@ const AdminCMS = ({
                     placeholder="213555000000"
                     className="w-full p-4 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10 transition-all"
                   />
-                  <p className="text-xs font-bold text-gray-500 mt-2">{'سيظهر في الزر العائم للتواصل عبر واتساب.'}</p>
+                  <p className="text-xs font-bold text-gray-500 mt-2">{'يظهر هذا الرقم للزبائن داخل المتجر.'}</p>
                 </div>
 
 
@@ -2260,10 +2380,10 @@ const AdminCMS = ({
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
                       <h3 className="text-base font-black text-slate-900">أسعار التوصيل حسب الولاية</h3>
-                      <p className="text-xs font-bold text-gray-500 mt-1">الأسعار تُطبّق تلقائيًا في صفحة إتمام الطلب حسب الولاية المختارة.</p>
+                      <p className="text-xs font-bold text-gray-500 mt-1">حدّد سعر التوصيل المناسب لكل ولاية من قائمة الولايات.</p>
                     </div>
                     <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-600">
-                      <span>ولايات بسعر مخصص:</span>
+                      <span>عدد الولايات المسعّرة:</span>
                       <span className="text-emerald-600">{configuredWilayaShippingCount}</span>
                       <span>/</span>
                       <span>{wilayaShippingOptions.length || 58}</span>
@@ -2293,7 +2413,7 @@ const AdminCMS = ({
 
                   {isWilayaShippingLoading && (
                     <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm font-black text-slate-500">
-                      جارٍ تحميل قائمة الولايات...
+                      جارٍ تحميل أسعار الولايات...
                     </div>
                   )}
 
@@ -2333,7 +2453,7 @@ const AdminCMS = ({
                                     placeholder="0"
                                     className="w-full rounded-xl border border-gray-300 bg-white py-2.5 pr-3 pl-12 text-sm font-black text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                                   />
-                                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-500">د.ج</span>
+                                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-500">\u062f.\u062c</span>
                                 </div>
                               </div>
                             );
@@ -2343,26 +2463,24 @@ const AdminCMS = ({
                     </div>
                   )}
 
-                  <p className="text-xs font-bold text-gray-500">
-                    إذا تُرك السعر فارغًا، يتم اعتماد سعر توصيل افتراضي 0 د.ج لتلك الولاية.
-                  </p>
+                  <p className="text-xs font-bold text-gray-500">إذا تُرك السعر فارغًا أو كانت القيمة 0 د.ج فسيُعتبر التوصيل مجانيًا.</p>
                 </div>
 
                 <div className="pt-6 border-t border-gray-100">
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-bold text-gray-700">{'حالة المتجر (إغلاق / فتح)'}</label>
+                    <label className="block text-sm font-bold text-gray-700">{'حالة المتجر (مفتوح / مغلق)'}</label>
                     <span className={
                       'px-3 py-1 rounded-full text-xs font-bold ' +
                       (siteConfig.isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700')
                     }>
-                      {siteConfig.isOnline ? 'نشط الآن' : 'مغلق للصيانة'}
+                      {siteConfig.isOnline ? 'المتجر مفتوح' : 'المتجر مغلق'}
                     </span>
                   </div>
 
                   <button
                     onClick={() => {
                       setSiteConfig({ ...siteConfig, isOnline: !siteConfig.isOnline });
-                      showToast(siteConfig.isOnline ? 'تم إغلاق المتجر للزبائن' : 'تم فتح المتجر للزبائن');
+                      showToast(siteConfig.isOnline ? 'تم إغلاق المتجر مؤقتًا' : 'تم فتح المتجر بنجاح');
                     }}
                     className={
                       'w-full py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-all ' +
@@ -2371,15 +2489,15 @@ const AdminCMS = ({
                         : 'bg-emerald-500 text-white shadow-lg hover:bg-emerald-600')
                     }
                   >
-                    <Power size={20} /> {siteConfig.isOnline ? 'تفعيل وضع الصيانة' : 'فتح المتجر'}
+                    <Power size={20} /> {siteConfig.isOnline ? 'تعطيل استقبال الطلبات' : 'فتح المتجر'}
                   </button>
                 </div>
 
                 <div className="pt-6 border-t border-gray-100">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-black text-slate-900">{'إظهار حقل الكوبون للعميل'}</p>
-                      <p className="text-xs font-bold text-gray-500 mt-1">{'يمكنك إخفاء حقل الكوبون مؤقتاً مع الاحتفاظ بالمنطق الداخلي.'}</p>
+                      <p className="text-sm font-black text-slate-900">{'إظهار حقل الكوبون للزبون'}</p>
+                      <p className="text-xs font-bold text-gray-500 mt-1">{'يمكنك إخفاء حقل الكوبون حاليًا ثم تفعيله لاحقًا من الإعدادات.'}</p>
                     </div>
                     <button
                       type="button"
@@ -2391,7 +2509,7 @@ const AdminCMS = ({
                           : 'bg-slate-50 text-slate-600 border-slate-200')
                       }
                     >
-                      {siteConfig.showCouponInput ? 'ظاهر حالياً' : 'مخفي حالياً'}
+                      {siteConfig.showCouponInput ? 'ظاهر للزبون' : 'مخفي عن الزبون'}
                     </button>
                   </div>
                 </div>
@@ -2401,7 +2519,7 @@ const AdminCMS = ({
 
           {activeTab === 'marketing' && (
             <div className="space-y-6 animate-in fade-in max-w-3xl">
-              <h2 className="text-2xl font-black text-slate-900 mb-6">التسويق والإعلانات</h2>
+              <h2 className="text-2xl font-black text-slate-900 mb-6">التسويق والإشعارات</h2>
 
               <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-8 rounded-[2rem] text-white shadow-xl">
                 <div className="flex items-center gap-3 mb-6">
@@ -2413,29 +2531,29 @@ const AdminCMS = ({
                   type="text"
                   value={siteConfig.announcement}
                   onChange={(event) => setSiteConfig({ ...siteConfig, announcement: event.target.value })}
-                  placeholder="مثال: توصيل مجاني هذا الأسبوع"
+                  placeholder="مثال: توصيل سريع إلى جميع الولايات"
                   className="w-full p-4 rounded-xl bg-white/20 border border-white/30 text-white placeholder-emerald-200 font-bold outline-none focus:bg-white/30 transition-all mb-4"
                 />
 
                 <div className="flex gap-3">
-                  <button onClick={() => showToast('تم تحديث شريط الإعلانات')} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg">
+                  <button onClick={() => showToast('تم حفظ نص الإعلان')} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg">
                     حفظ الإعلان
                   </button>
                   <button
                     onClick={() => {
                       setSiteConfig({ ...siteConfig, announcement: '' });
-                      showToast('تم إخفاء الإعلان');
+                      showToast('تم مسح الإعلان');
                     }}
                     className="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-xl font-bold transition-all border border-white/20"
                   >
-                    إخفاء الإعلان
+                    مسح الإعلان
                   </button>
                 </div>
               </div>
               <div className="bg-white border border-gray-200 p-6 md:p-8 rounded-[2rem] space-y-6" data-testid="customer-notices-manager">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                   <h3 className="text-xl font-black text-slate-900">إشعارات الزبائن</h3>
-                  <button type="button" onClick={resetNoticeForm} className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-600 hover:bg-slate-50">إشعار جديد</button>
+                  <button type="button" onClick={resetNoticeForm} className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-600 hover:bg-slate-50">بدء جديد</button>
                 </div>
 
                 <form onSubmit={handleSaveNotice} className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2444,7 +2562,7 @@ const AdminCMS = ({
                     <input type="text" value={noticeForm.title} onChange={(event) => setNoticeForm({ ...noticeForm, title: event.target.value })} className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900" />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">مستوى الأهمية</label>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">مستوى الإشعار</label>
                     <select value={noticeForm.level} onChange={(event) => setNoticeForm({ ...noticeForm, level: event.target.value })} className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900">
                       {NOTICE_LEVEL_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
@@ -2456,7 +2574,7 @@ const AdminCMS = ({
                     <textarea rows={3} value={noticeForm.message} onChange={(event) => setNoticeForm({ ...noticeForm, message: event.target.value })} className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900" />
                   </div>
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-bold text-gray-700 mb-2">صورة (اختياري)</label>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">صورة (اختيارية)</label>
                     <div className="flex gap-2">
                       <input type="url" dir="ltr" value={noticeForm.image} onChange={(event) => setNoticeForm({ ...noticeForm, image: event.target.value })} placeholder="https://..." className="flex-1 p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900" />
                       <label className="px-3 py-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-xs font-black text-slate-600 cursor-pointer">
@@ -2464,7 +2582,7 @@ const AdminCMS = ({
                         <input type="file" accept="image/*" onChange={handleUploadNoticeImage} className="hidden" />
                       </label>
                     </div>
-                    {noticeImageUploadState.isUploading && <p className="mt-1 text-[11px] font-black text-emerald-700">جاري رفع الصورة... {noticeImageUploadState.progress}%</p>}
+                    {noticeImageUploadState.isUploading && <p className="mt-1 text-[11px] font-black text-emerald-700">جارٍ رفع الصورة... {noticeImageUploadState.progress}%</p>}
                     {noticeImageUploadState.error && <p className="mt-1 text-[11px] font-black text-red-600">{noticeImageUploadState.error}</p>}
                     {noticeImageUploadState.success && !noticeImageUploadState.isUploading && <p className="mt-1 text-[11px] font-black text-emerald-600">{noticeImageUploadState.success}</p>}
                   </div>
@@ -2487,20 +2605,20 @@ const AdminCMS = ({
                     <input type="datetime-local" value={noticeForm.endAt} onChange={(event) => setNoticeForm({ ...noticeForm, endAt: event.target.value })} className="w-full p-3 rounded-xl border border-gray-300 font-bold outline-none focus:border-slate-900" />
                   </div>
                   <div className="md:col-span-2 flex gap-3">
-                    <button type="submit" className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg">{editingNoticeId ? 'حفظ التعديل' : 'إنشاء إشعار'}</button>
+                    <button type="submit" className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg">{editingNoticeId ? 'حفظ التعديل' : 'إضافة إشعار'}</button>
                     {editingNoticeId && <button type="button" onClick={resetNoticeForm} className="bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-bold">إلغاء التعديل</button>}
                   </div>
                 </form>
 
                 <div className="space-y-3">
                   {customerNotices.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm font-bold text-gray-400">لا توجد إشعارات حالياً.</div>
+                    <div className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-sm font-bold text-gray-400">لا توجد إشعارات مضافة حتى الآن.</div>
                   ) : (
                     customerNotices.map((notice) => (
                       <div key={notice.id} className="rounded-xl border border-gray-200 p-4 space-y-2">
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                           <div>
-                            <p className="font-black text-slate-900">{notice.title || 'بدون عنوان'}</p>
+                            <p className="font-black text-slate-900">{notice.title || 'إشعار بدون عنوان'}</p>
                             <p className="text-xs font-bold text-slate-500">{(NOTICE_LEVEL_OPTIONS.find((entry) => entry.value === notice.level)?.label || notice.level)} - P{Number(notice.priority) || 0}</p>
                           </div>
                           <div className="flex items-center gap-2">
@@ -2519,7 +2637,7 @@ const AdminCMS = ({
 
 
                             <div className="bg-white border border-gray-200 p-6 md:p-8 rounded-[2rem] space-y-6">
-                <h3 className="text-xl font-black text-slate-900">كوبونات الخصم المتقدمة</h3>
+                <h3 className="text-xl font-black text-slate-900">إدارة أكواد الخصم</h3>
 
                 <form onSubmit={handleCreateCoupon} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -2545,7 +2663,7 @@ const AdminCMS = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">عدد الاستخدامات المسموحة</label>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">عدد الاستخدامات المتاح</label>
                     <input
                       type="number"
                       min="1"
@@ -2573,7 +2691,7 @@ const AdminCMS = ({
                       onClick={() => setCouponForm({ code: '', discount: 10, maxUses: 100, expiresAt: '' })}
                       className="bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-bold"
                     >
-                      تفريغ الحقول
+                      إعادة تعيين
                     </button>
                   </div>
                 </form>
@@ -2593,10 +2711,10 @@ const AdminCMS = ({
                             <p className="font-black text-slate-900" dir="ltr">{coupon.code}</p>
                             <p className="text-xs font-bold text-gray-500">خصم {coupon.discount}% • الاستخدام {coupon.usedCount}/{coupon.maxUses}</p>
                             {coupon.expiresAt && (
-                              <p className="text-xs font-bold text-gray-500">ينتهي: {new Date(coupon.expiresAt).toLocaleDateString('ar-DZ')}</p>
+                              <p className="text-xs font-bold text-gray-500">ينتهي في: {new Date(coupon.expiresAt).toLocaleDateString('ar-DZ')}</p>
                             )}
                             <p className={`text-xs font-black ${expired || exhausted ? 'text-red-600' : 'text-emerald-600'}`}>
-                              {expired ? 'منتهي الصلاحية' : exhausted ? 'نفد الاستخدام' : 'فعّال'}
+                              {expired ? 'منتهي الصلاحية' : exhausted ? 'نفد الاستخدام' : 'نشط'}
                             </p>
                           </div>
                           <button
@@ -2619,6 +2737,9 @@ const AdminCMS = ({
   );
 };
 export default AdminCMS;
+
+
+
 
 
 

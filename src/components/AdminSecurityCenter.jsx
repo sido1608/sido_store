@@ -15,6 +15,7 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import {
+  exportSecurityView,
   fetchBlockedIps,
   fetchSecurityBundle,
   performSecurityAction,
@@ -60,6 +61,7 @@ const severityBadgeClass = (severity, isDarkMode) => {
 };
 
 const DEFAULT_SETTINGS = {
+  retentionDays: 15,
   thresholds: {
     failedLoginBurst: 5,
     resetPasswordBurst: 4,
@@ -73,6 +75,10 @@ const DEFAULT_SETTINGS = {
     loginEnabled: true,
     resetPasswordEnabled: true,
     heightenedProtection: false,
+  },
+  autoActions: {
+    autoBlockOnCritical: true,
+    autoBlockDurationMinutes: 1440,
   },
 };
 
@@ -94,8 +100,11 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
   const [eventsSearch, setEventsSearch] = useState('');
   const [alertsSearch, setAlertsSearch] = useState('');
   const [eventsSeverityFilter, setEventsSeverityFilter] = useState('all');
+  const [eventsSourceFilter, setEventsSourceFilter] = useState('all');
   const [alertsSeverityFilter, setAlertsSeverityFilter] = useState('all');
+  const [alertsStatusFilter, setAlertsStatusFilter] = useState('all');
   const [draftSettings, setDraftSettings] = useState(DEFAULT_SETTINGS);
+  const [isExporting, setIsExporting] = useState('');
 
   const metrics = bundle?.overview?.metrics || {};
   const trends = bundle?.overview?.trends || {};
@@ -104,6 +113,8 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
   const securityAlerts = useMemo(() => (Array.isArray(bundle?.alerts) ? bundle.alerts : []), [bundle?.alerts]);
   const auditLogs = Array.isArray(bundle?.audit) ? bundle.audit : [];
   const blockedIps = Array.isArray(bundle?.blockedIps) ? bundle.blockedIps : [];
+  const eventSources = useMemo(() => Array.from(new Set(securityEvents.map((entry) => String(entry.source || '').trim()).filter(Boolean))).sort(), [securityEvents]);
+  const alertStatuses = useMemo(() => Array.from(new Set(securityAlerts.map((entry) => String(entry.status || '').trim()).filter(Boolean))).sort(), [securityAlerts]);
 
   const loadBundle = useCallback(async (silent = false) => {
     try {
@@ -130,28 +141,30 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
     const query = eventsSearch.trim().toLowerCase();
     return securityEvents.filter((entry) => {
       const severityOk = eventsSeverityFilter === 'all' || entry.severity === eventsSeverityFilter;
+      const sourceOk = eventsSourceFilter === 'all' || String(entry.source || '') === eventsSourceFilter;
       const queryOk =
         !query ||
         String(entry.summary || '').toLowerCase().includes(query) ||
         String(entry.eventType || '').toLowerCase().includes(query) ||
         String(entry.ipAddress || '').toLowerCase().includes(query) ||
         String(entry.userEmail || '').toLowerCase().includes(query);
-      return severityOk && queryOk;
+      return severityOk && sourceOk && queryOk;
     });
-  }, [eventsSearch, eventsSeverityFilter, securityEvents]);
+  }, [eventsSearch, eventsSeverityFilter, eventsSourceFilter, securityEvents]);
 
   const filteredAlerts = useMemo(() => {
     const query = alertsSearch.trim().toLowerCase();
     return securityAlerts.filter((entry) => {
       const severityOk = alertsSeverityFilter === 'all' || entry.severity === alertsSeverityFilter;
+      const statusOk = alertsStatusFilter === 'all' || String(entry.status || '') === alertsStatusFilter;
       const queryOk =
         !query ||
         String(entry.summary || '').toLowerCase().includes(query) ||
         String(entry.eventType || '').toLowerCase().includes(query) ||
         String(entry.id || '').toLowerCase().includes(query);
-      return severityOk && queryOk;
+      return severityOk && statusOk && queryOk;
     });
-  }, [alertsSearch, alertsSeverityFilter, securityAlerts]);
+  }, [alertsSearch, alertsSeverityFilter, alertsStatusFilter, securityAlerts]);
 
   const runAction = async (action, data = {}, successMessage = 'Action completed successfully') => {
     try {
@@ -163,6 +176,18 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
       showToast(String(error?.message || 'Failed to execute action.'), 'error');
     } finally {
       setIsActionBusy(false);
+    }
+  };
+
+  const handleExport = async (view, filters = {}, format = 'csv') => {
+    try {
+      setIsExporting(`${view}-${format}`);
+      await exportSecurityView(view, filters, format);
+      showToast(`Export ready: ${view} (${format.toUpperCase()})`, 'success');
+    } catch (error) {
+      showToast(String(error?.message || 'Failed to export data.'), 'error');
+    } finally {
+      setIsExporting('');
     }
   };
 
@@ -363,7 +388,7 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
 
       {activeSection === 'logs' && (
         <div className={`rounded-2xl border p-4 space-y-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/80' : 'border-slate-200 bg-white'}`}>
-          <div className="flex flex-col md:flex-row gap-2">
+          <div className="flex flex-col lg:flex-row gap-2">
             <div className={`flex-1 rounded-xl border px-3 py-2 flex items-center gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
               <Search size={15} />
               <input value={eventsSearch} onChange={(event) => setEventsSearch(event.target.value)} placeholder="Search logs..." className="flex-1 bg-transparent outline-none text-sm font-bold" />
@@ -376,6 +401,14 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
               <option value="low">Low</option>
               <option value="info">Info</option>
             </select>
+            <select value={eventsSourceFilter} onChange={(event) => setEventsSourceFilter(event.target.value)} className={`rounded-xl border px-3 py-2 text-sm font-black ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-300 bg-white text-slate-800'}`}>
+              <option value="all">All sources</option>
+              {eventSources.map((source) => (
+                <option key={source} value={source}>{source}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => handleExport('events', { severity: eventsSeverityFilter === 'all' ? '' : eventsSeverityFilter, source: eventsSourceFilter === 'all' ? '' : eventsSourceFilter, query: eventsSearch }, 'csv')} disabled={isExporting !== ''} className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'events-csv' ? 'Exporting...' : 'Export CSV'}</button>
+            <button type="button" onClick={() => handleExport('events', { severity: eventsSeverityFilter === 'all' ? '' : eventsSeverityFilter, source: eventsSourceFilter === 'all' ? '' : eventsSourceFilter, query: eventsSearch }, 'json')} disabled={isExporting !== ''} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'events-json' ? 'Exporting...' : 'Export JSON'}</button>
           </div>
 
           <div className="space-y-2 max-h-[55vh] overflow-auto">
@@ -400,7 +433,7 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
 
       {activeSection === 'alerts' && (
         <div className={`rounded-2xl border p-4 space-y-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/80' : 'border-slate-200 bg-white'}`}>
-          <div className="flex flex-col md:flex-row gap-2">
+          <div className="flex flex-col lg:flex-row gap-2">
             <div className={`flex-1 rounded-xl border px-3 py-2 flex items-center gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
               <Search size={15} />
               <input value={alertsSearch} onChange={(event) => setAlertsSearch(event.target.value)} placeholder="Search alerts..." className="flex-1 bg-transparent outline-none text-sm font-bold" />
@@ -412,6 +445,14 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
               <option value="medium">Medium</option>
               <option value="low">Low</option>
             </select>
+            <select value={alertsStatusFilter} onChange={(event) => setAlertsStatusFilter(event.target.value)} className={`rounded-xl border px-3 py-2 text-sm font-black ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-300 bg-white text-slate-800'}`}>
+              <option value="all">All statuses</option>
+              {alertStatuses.map((status) => (
+                <option key={status} value={status}>{status}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => handleExport('alerts', { severity: alertsSeverityFilter === 'all' ? '' : alertsSeverityFilter, status: alertsStatusFilter === 'all' ? '' : alertsStatusFilter, query: alertsSearch }, 'csv')} disabled={isExporting !== ''} className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'alerts-csv' ? 'Exporting...' : 'Export CSV'}</button>
+            <button type="button" onClick={() => handleExport('alerts', { severity: alertsSeverityFilter === 'all' ? '' : alertsSeverityFilter, status: alertsStatusFilter === 'all' ? '' : alertsStatusFilter, query: alertsSearch }, 'json')} disabled={isExporting !== ''} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'alerts-json' ? 'Exporting...' : 'Export JSON'}</button>
           </div>
 
           <div className="space-y-2 max-h-[55vh] overflow-auto">
@@ -472,9 +513,15 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
                   <p className={`text-xs font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>No blocked IP addresses.</p>
                 ) : (
                   blockedIps.filter((entry) => entry.status === 'blocked').map((entry) => (
-                    <div key={entry.id || entry.ipAddress} className="flex items-center justify-between gap-2 text-xs">
-                      <span className={isDarkMode ? 'text-slate-200 font-black' : 'text-slate-700 font-black'}>{entry.ipAddress}</span>
-                      <button onClick={() => runAction('unblock_ip', { ipAddress: entry.ipAddress }, 'IP unblocked')} className="px-2 py-1 rounded-lg bg-emerald-600 text-white font-black">Unblock</button>
+                    <div key={entry.id || entry.ipAddress} className={isDarkMode ? 'rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2' : 'rounded-xl border border-slate-200 bg-white px-3 py-2'}>
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className={isDarkMode ? 'text-slate-200 font-black' : 'text-slate-700 font-black'}>{entry.ipAddress}</span>
+                        <button onClick={() => runAction('unblock_ip', { ipAddress: entry.ipAddress }, 'IP unblocked')} className="px-2 py-1 rounded-lg bg-emerald-600 text-white font-black">Unblock</button>
+                      </div>
+                      <div className={isDarkMode ? 'mt-1 space-y-1 text-[11px] font-bold text-slate-400' : 'mt-1 space-y-1 text-[11px] font-bold text-slate-500'}>
+                        <p>Reason: {entry.reason || 'n/a'}</p>
+                        <p>Until: {entry.expiresAt ? new Date(entry.expiresAt).toLocaleString('fr-DZ') : 'manual release only'}</p>
+                      </div>
                     </div>
                   ))
                 )}
@@ -486,6 +533,10 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
 
       {activeSection === 'audit' && (
         <div className={`rounded-2xl border p-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/80' : 'border-slate-200 bg-white'}`}>
+          <div className="mb-3 flex flex-wrap gap-2 justify-end">
+            <button type="button" onClick={() => handleExport('audit', {}, 'csv')} disabled={isExporting !== ''} className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'audit-csv' ? 'Exporting...' : 'Export Audit CSV'}</button>
+            <button type="button" onClick={() => handleExport('audit', {}, 'json')} disabled={isExporting !== ''} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-black text-white disabled:opacity-60">{isExporting === 'audit-json' ? 'Exporting...' : 'Export Audit JSON'}</button>
+          </div>
           <div className="space-y-2 max-h-[60vh] overflow-auto">
             {auditLogs.length === 0 ? (
               <p className={`text-sm font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>No audit entries yet.</p>
@@ -525,15 +576,24 @@ const AdminSecurityCenter = ({ isDarkMode, showToast, adminUser, pageTransition 
               </select>
             </label>
             <label className="text-sm font-black">
+              <span className={isDarkMode ? 'text-slate-200' : 'text-slate-700'}>retentionDays</span>
+              <input type="number" min="7" max="180" value={draftSettings.retentionDays || 15} onChange={(event) => setDraftSettings((previous) => ({ ...previous, retentionDays: Number(event.target.value) || 15 }))} className={`mt-1 w-full rounded-xl border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-300 bg-white text-slate-900'}`} />
+            </label>
+            <label className="text-sm font-black">
+              <span className={isDarkMode ? 'text-slate-200' : 'text-slate-700'}>autoBlockDurationMinutes</span>
+              <input type="number" min="15" max="10080" value={draftSettings.autoActions?.autoBlockDurationMinutes || 1440} onChange={(event) => setDraftSettings((previous) => ({ ...previous, autoActions: { ...(previous.autoActions || {}), autoBlockDurationMinutes: Number(event.target.value) || 1440 } }))} className={`mt-1 w-full rounded-xl border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-300 bg-white text-slate-900'}`} />
+            </label>
+            <label className="text-sm font-black md:col-span-2">
               <span className={isDarkMode ? 'text-slate-200' : 'text-slate-700'}>mutedEventTypes (comma separated)</span>
               <input type="text" value={Array.isArray(draftSettings.telegram?.mutedEventTypes) ? draftSettings.telegram.mutedEventTypes.join(', ') : ''} onChange={(event) => setDraftSettings((previous) => ({ ...previous, telegram: { ...(previous.telegram || {}), mutedEventTypes: parseListInput(event.target.value) } }))} className={`mt-1 w-full rounded-xl border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-300 bg-white text-slate-900'}`} />
             </label>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
             <button type="button" onClick={() => setDraftSettings((previous) => ({ ...previous, telegram: { ...(previous.telegram || {}), enabled: !(previous.telegram?.enabled ?? true) } }))} className={`px-3 py-2 rounded-xl text-sm font-black ${draftSettings.telegram?.enabled ? 'bg-emerald-600 text-white' : 'bg-slate-600 text-white'}`}>{draftSettings.telegram?.enabled ? 'Telegram: ON' : 'Telegram: OFF'}</button>
             <button type="button" onClick={() => setDraftSettings((previous) => ({ ...previous, controls: { ...(previous.controls || {}), loginEnabled: !(previous.controls?.loginEnabled ?? true) } }))} className={`px-3 py-2 rounded-xl text-sm font-black ${draftSettings.controls?.loginEnabled ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>{draftSettings.controls?.loginEnabled ? 'Login Enabled' : 'Login Disabled'}</button>
             <button type="button" onClick={() => setDraftSettings((previous) => ({ ...previous, controls: { ...(previous.controls || {}), resetPasswordEnabled: !(previous.controls?.resetPasswordEnabled ?? true) } }))} className={`px-3 py-2 rounded-xl text-sm font-black ${draftSettings.controls?.resetPasswordEnabled ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-slate-950'}`}>{draftSettings.controls?.resetPasswordEnabled ? 'Reset Enabled' : 'Reset Disabled'}</button>
+            <button type="button" onClick={() => setDraftSettings((previous) => ({ ...previous, autoActions: { ...(previous.autoActions || {}), autoBlockOnCritical: !(previous.autoActions?.autoBlockOnCritical ?? true) } }))} className={`px-3 py-2 rounded-xl text-sm font-black ${(draftSettings.autoActions?.autoBlockOnCritical ?? true) ? 'bg-rose-600 text-white' : 'bg-slate-600 text-white'}`}>{(draftSettings.autoActions?.autoBlockOnCritical ?? true) ? 'Auto Block: ON' : 'Auto Block: OFF'}</button>
           </div>
 
           <div className="flex justify-end gap-2">
